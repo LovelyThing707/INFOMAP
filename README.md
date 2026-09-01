@@ -1,40 +1,75 @@
-# Tipster
+<p align="center">
+  <img src="public/icon-512.png" alt="Tipster" width="128" height="128" />
+</p>
 
-**現地でしか取れない情報を、必要な人へ人数限定・期限つきで届ける。**
+<h1 align="center">Tipster</h1>
 
-| | |
-| --- | --- |
-| **製品名** | Tipster |
-| **コードネーム** | INFOMAP |
-| **リポジトリ** | 非公開（Private） |
-| **プラットフォーム** | iOS / Android / Web（Expo） |
-| **バックエンド** | Supabase（Auth · Postgres · RLS · Storage · pg_cron） |
-| **検証エリア** | 東京圏（御茶ノ水中心・半径 30km） |
-| **ステータス** | プレプロダクション — 実決済・出金は未接続 |
+<p align="center">
+  <strong>現地でしか取れない情報を、必要な人へ人数限定・期限つきで届ける。</strong>
+</p>
 
-口コミでも、残る記事でもない。すぐ腐る現場の事実を、その情報で今日得をする人に売る。
+<p align="center">
+  Your tips have a price. · Code name: <code>INFOMAP</code>
+</p>
+
+<p align="center">
+  <a href="#クイックスタート"><img src="https://img.shields.io/badge/status-pre--production-orange?style=for-the-badge" alt="Pre-production" /></a>
+  <a href="#セキュリティモデル"><img src="https://img.shields.io/badge/repo-private-critical?style=for-the-badge" alt="Private" /></a>
+  <img src="https://img.shields.io/badge/area-Tokyo_30km-0A66C2?style=for-the-badge" alt="Tokyo area" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Expo-000020?style=flat-square&logo=expo&logoColor=white" alt="Expo" />
+  <img src="https://img.shields.io/badge/React_Native-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React Native" />
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Supabase-3FCF8E?style=flat-square&logo=supabase&logoColor=white" alt="Supabase" />
+  <img src="https://img.shields.io/badge/Postgres-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="Postgres" />
+  <img src="https://img.shields.io/badge/Leaflet-199900?style=flat-square&logo=leaflet&logoColor=white" alt="Leaflet" />
+</p>
 
 ---
 
-## 目次
+<p align="center">
+  口コミでも、残る記事でもない。<br />
+  すぐ腐る現場の事実を、その情報で今日得をする人に売る。
+</p>
 
-1. [プロダクト概要](#プロダクト概要)
-2. [なぜこの形か](#なぜこの形か)
-3. [アーキテクチャ](#アーキテクチャ)
-4. [セキュリティモデル](#セキュリティモデル)
-5. [現状と残作業](#現状と残作業)
-6. [クイックスタート](#クイックスタート)
-7. [運用コマンド](#運用コマンド)
-8. [リポジトリ構成](#リポジトリ構成)
-9. [設計原則](#設計原則)
-10. [画面マップ](#画面マップ)
-11. [ロードマップ](#ロードマップ)
+<table align="center">
+  <tr>
+    <td align="center"><strong>製品名</strong><br />Tipster</td>
+    <td align="center"><strong>コードネーム</strong><br />INFOMAP</td>
+    <td align="center"><strong>クライアント</strong><br />iOS · Android · Web</td>
+    <td align="center"><strong>バックエンド</strong><br />Supabase</td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Auth</strong><br />Email</td>
+    <td align="center"><strong>権限</strong><br />RLS · RPC</td>
+    <td align="center"><strong>検証エリア</strong><br />東京圏 30km</td>
+    <td align="center"><strong>決済</strong><br />未接続</td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="#プロダクト概要">概要</a> ·
+  <a href="#なぜこの形か">思想</a> ·
+  <a href="#アーキテクチャ">構成</a> ·
+  <a href="#セキュリティモデル">セキュリティ</a> ·
+  <a href="#現状と残作業">進捗</a> ·
+  <a href="#クイックスタート">起動</a> ·
+  <a href="#運用コマンド">運用</a> ·
+  <a href="#設計原則">原則</a> ·
+  <a href="#ロードマップ">ロードマップ</a>
+</p>
 
 ---
 
 ## プロダクト概要
 
 Tipster は、地図上のピンを通じて **「今この場所の状態」だけ** を売買するマーケットプレイスです。情報は鮮度が価値そのものなので、人数・期限・証拠（現地写真）で供給を絞り、未購入者には本文も写真も渡しません。
+
+| 地図で探す | 人数限定 | 期限つき | 証拠つき |
+| :---: | :---: | :---: | :---: |
+| 募集 / 販売をトグル | 先着枠で売り切る | 腐る前に届ける | 現地写真 · 距離 |
 
 ### 2つの取引導線
 
@@ -71,24 +106,16 @@ Tipster は、地図上のピンを通じて **「今この場所の状態」だ
 
 ## アーキテクチャ
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  Client（Expo Router · React Native / Web）              │
-│  画面は InfoRepository の型だけを見る                     │
-└──────────────────────────┬───────────────────────────────┘
-                           │
-             ┌─────────────┴─────────────┐
-             ▼                           ▼
-  AsyncStorage 実装               Supabase 実装
-  （ローカル検証）                （本番相当）
-             │                           │
-             │                           ▼
-             │                 ┌──────────────────────┐
-             │                 │ Auth · RLS · RPC     │
-             │                 │ Storage（private）   │
-             │                 │ pg_cron → run_tick() │
-             │                 └──────────────────────┘
-             └────────── 同じ画面契約 ────────────────┘
+```mermaid
+flowchart TB
+  UI["Client<br/>Expo Router · React Native / Web"]
+  UI --> Repo["InfoRepository<br/>画面は型だけを見る"]
+  Repo --> Local["AsyncStorage 実装<br/>ローカル検証"]
+  Repo --> Remote["Supabase 実装<br/>本番相当"]
+  Remote --> Auth["Auth"]
+  Remote --> RLS["Postgres · RLS · RPC"]
+  Remote --> Storage["Storage private"]
+  Remote --> Cron["pg_cron → run_tick()"]
 ```
 
 **切り替え条件はひとつだけ。** `.env.local` に `EXPO_PUBLIC_SUPABASE_URL` と `EXPO_PUBLIC_SUPABASE_ANON_KEY` の両方が揃ったとき、`src/lib/supabase.ts` の `isSupabaseEnabled` が Supabase 実装を選びます。片方だけでは繋ぎません。
@@ -293,5 +320,11 @@ Web は動作確認と閲覧の補助です。出品の主戦場はネイティ�
 
 ---
 
-**Tipster** — Your tips have a price.  
-*Code name: INFOMAP*
+<p align="center">
+  <img src="public/icon-512.png" alt="Tipster" width="64" height="64" />
+</p>
+
+<p align="center">
+  <strong>Tipster</strong> — Your tips have a price.<br />
+  <sub>Code name: INFOMAP</sub>
+</p>
