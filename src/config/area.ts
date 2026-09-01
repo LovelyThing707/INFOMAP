@@ -5,14 +5,17 @@ import type { LatLng } from '@/domain/types';
  * 同じ場所で売買が繰り返されるかを見たいので、歩いて回れる都心の範囲に留める。
  */
 export const AREA = {
-  id: 'tokyo-core',
-  label: '東京都心',
-  // 秋葉原を中心に、上野・浅草・日本橋・東京駅・銀座・神保町までを含む
-  center: { lat: 35.69845, lng: 139.77313 } as LatLng,
-  radiusM: 3500,
-  defaultZoom: 15,
-  minZoom: 12,
-  maxZoom: 19,
+  id: 'tokyo-area',
+  label: '東京圏',
+  // 御茶ノ水あたりを中心に、新宿・渋谷・池袋から横浜・大宮・船橋までを含む
+  center: { lat: 35.69, lng: 139.75 } as LatLng,
+  radiusM: 30000,
+  // 初期表示で山手線の内外がまとめて入る高さ。寄りたい人は自分で拡大する
+  defaultZoom: 12,
+  // 引きは世界地図まで、寄りは棚の前まで。検証エリアは出品の可否だけに使い、
+  // 見るぶんには制限しない。どこまでが対象かは引いて確かめられたほうがいい
+  minZoom: 2,
+  maxZoom: 20,
 } as const;
 
 const CARTO_KEY = process.env.EXPO_PUBLIC_CARTO_KEY;

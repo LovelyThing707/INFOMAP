@@ -1,16 +1,25 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { PinDetail } from '@/components/sheet/PinDetail';
-import { Colors, Fonts } from '@/constants/theme';
-import type { PurchaseFailure } from '@/data/repository';
+import { Fonts, type ThemeColors } from '@/constants/theme';
+import type { PurchaseFailure, ReportResultKind } from '@/data/repository';
+import type { ReportReason } from '@/domain/types';
 import { useAsync } from '@/hooks/use-async';
+import { useColors } from '@/hooks/use-colors';
 import { useUserLocation } from '@/hooks/use-location';
 import { useNow } from '@/hooks/use-now';
 import { nowMs } from '@/lib/clock';
+import { requireSignedIn } from '@/lib/auth-gate';
 import { closeModal } from '@/lib/navigation';
 import { repo, useSession } from '@/state/session';
+
+const REPORT_MESSAGE: Record<ReportResultKind, string> = {
+  recorded: '通報を受け付けました',
+  already: 'この出品はすでに通報済みです',
+  voided: '通報が規定数に達したため、この出品を取り下げました',
+};
 
 const PURCHASE_ERROR: Record<PurchaseFailure, string> = {
   not_found: 'この情報は見つかりませんでした',
@@ -23,6 +32,8 @@ const PURCHASE_ERROR: Record<PurchaseFailure, string> = {
 };
 
 export default function PinModal() {
+  const colors = useColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const { id } = useLocalSearchParams<{ id: string }>();
   const userId = useSession((s) => s.userId);
   const balance = useSession((s) => s.balance);
@@ -49,6 +60,7 @@ export default function PinModal() {
   }
 
   const buy = async () => {
+    if (!requireSignedIn()) return;
     setBusy(true);
     setError(null);
     const result = await repo.purchase(pin.id, userId, nowMs());
@@ -57,9 +69,11 @@ export default function PinModal() {
     setBusy(false);
   };
 
-  const report = async () => {
-    await repo.createReport(userId, 'pin', pin.id, '扱わない情報の疑い', nowMs());
-    setError('通報を受け付けました');
+  const report = async (reason: ReportReason) => {
+    if (!requireSignedIn()) return;
+    const result = await repo.createReport(userId, 'pin', pin.id, reason, nowMs());
+    await bump();
+    setError(REPORT_MESSAGE[result]);
   };
 
   return (
@@ -82,8 +96,10 @@ export default function PinModal() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.bg },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  muted: { fontSize: 13, color: Colors.textSub, fontFamily: Fonts.sans },
-});
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    muted: { fontSize: 13, color: colors.textSub, fontFamily: Fonts.sans },
+  });
+}

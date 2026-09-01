@@ -1,7 +1,16 @@
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
+
+import type { PhotoProof } from '@/domain/types';
 
 const MAX_WIDTH = 900;
+
+export interface Evidence {
+  uri: string;
+  /** 位置が取れなかったときは null。その場合は未検証として扱う */
+  proof: PhotoProof | null;
+}
 
 /**
  * 端末の写真をそのまま持つと localStorage に入り切らないので、
@@ -19,44 +28,48 @@ async function normalize(uri: string): Promise<string> {
   }
 }
 
-export async function takePhoto(): Promise<string | null> {
+async function currentProof(takenAt: number): Promise<PhotoProof | null> {
+  try {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (!permission.granted) return null;
+    const position = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+    return {
+      lat: position.coords.latitude,
+      lng: position.coords.longitude,
+      takenAt,
+      accuracyM: position.coords.accuracy ?? null,
+      // Android だけが偽装を申告する。取れない端末では false のまま扱う
+      mocked: position.mocked === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * その場で撮って、撮った位置と時刻を一緒に持ち帰る。
+ *
+ * ライブラリから選ばせないのがこの関数の要点。持ち込み画像を許すと、
+ * 去年の写真でも他人の投稿でも出品できてしまい、写真が証拠として機能しない。
+ * 位置は撮影の直後に取る。並べて取ると、撮ってから移動した場合にずれる。
+ */
+export async function captureEvidence(): Promise<Evidence | null> {
   const permission = await ImagePicker.requestCameraPermissionsAsync();
   if (!permission.granted) return null;
+
   const result = await ImagePicker.launchCameraAsync({
     mediaTypes: ['images'],
     quality: 0.6,
     allowsEditing: false,
   });
   if (result.canceled || !result.assets.length) return null;
-  return normalize(result.assets[0].uri);
-}
 
-export async function pickPhoto(): Promise<string | null> {
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ['images'],
-    quality: 0.6,
-    allowsEditing: false,
-  });
-  if (result.canceled || !result.assets.length) return null;
-  return normalize(result.assets[0].uri);
-}
-
-/**
- * PCで動作を確認するとき用。カメラもライブラリもない環境で、
- * 写真必須のフローを止めないための代用。
- */
-export function placeholderPhoto(label: string): string {
-  const safe = label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420">` +
-    `<rect width="640" height="420" fill="#DBE3EC"/>` +
-    `<g fill="#94A3B8"><rect x="60" y="110" width="520" height="10" rx="5"/>` +
-    `<rect x="60" y="230" width="520" height="10" rx="5"/>` +
-    `<rect x="90" y="46" width="80" height="64" rx="8"/><rect x="200" y="60" width="80" height="50" rx="8"/>` +
-    `<rect x="310" y="40" width="80" height="70" rx="8"/><rect x="120" y="170" width="80" height="60" rx="8"/>` +
-    `<rect x="230" y="186" width="80" height="44" rx="8"/></g>` +
-    `<rect x="0" y="352" width="640" height="68" fill="rgba(15,23,42,0.72)"/>` +
-    `<text x="24" y="394" fill="#fff" font-family="sans-serif" font-size="24" font-weight="700">${safe}</text>` +
-    `</svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  const takenAt = Date.now();
+  const [uri, proof] = await Promise.all([
+    normalize(result.assets[0].uri),
+    currentProof(takenAt),
+  ]);
+  return { uri, proof };
 }

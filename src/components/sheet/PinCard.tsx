@@ -1,54 +1,60 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useMemo } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
-import { Colors, Fonts, Radius, Spacing } from '@/constants/theme';
+import { Fonts, Spacing, type ThemeColors } from '@/constants/theme';
 import {
   distanceM,
   formatDistance,
-  formatFreshness,
   formatYen,
   isPurchasable,
-  urgencyOf,
+  remainingSlots,
 } from '@/domain/rules';
 import type { LatLng, PublicPin } from '@/domain/types';
+import { useColors } from '@/hooks/use-colors';
 
-import { CountdownBadge, ScoreBadge, SlotBadge } from '../badges';
+import { Card, Pill } from '../ui';
+import { PinLifeBadge } from '../badges';
 
+/**
+ * 募集の BountyCard と同じ型のカード。
+ * 一覧では最低限、シートプレビューでは詳細画面へ送る（買う操作は出さない）。
+ */
 export function PinCard({
   pin,
   now,
   origin,
-  selected,
-  onPress,
+  onOpen,
+  /**
+   * false（既定）= 一覧。true = シート上のプレビューで「タップして詳細を見る」だけ出す。
+   */
+  preview = false,
 }: {
   pin: PublicPin;
   now: number;
   origin: LatLng | null;
-  selected?: boolean;
-  onPress: () => void;
+  onOpen: () => void;
+  preview?: boolean;
 }) {
-  const urgency = urgencyOf(pin, now);
+  const colors = useColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const open = isPurchasable(pin, now);
   const distance = origin ? distanceM(origin, { lat: pin.lat, lng: pin.lng }) : null;
+  const slots = remainingSlots(pin);
 
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.card,
-        selected && styles.cardSelected,
-        pressed && styles.cardPressed,
-        !open && styles.cardClosed,
-      ]}>
+    <Card style={[styles.card, !open && styles.cardClosed]} onPress={onOpen}>
       <View style={styles.head}>
-        <Text style={styles.headline} numberOfLines={2}>
+        <Text style={styles.headline} numberOfLines={3}>
           {pin.headline}
         </Text>
-        <Text style={styles.price}>{formatYen(pin.price)}</Text>
+        <View style={styles.priceBox}>
+          <Text style={styles.price}>{formatYen(pin.price)}</Text>
+        </View>
       </View>
 
       <View style={styles.placeRow}>
-        <Ionicons name="location-outline" size={13} color={Colors.textFaint} />
+        <Ionicons name="locate-outline" size={13} color={colors.textFaint} />
         <Text style={styles.place} numberOfLines={1}>
           {pin.placeLabel}
         </Text>
@@ -56,52 +62,41 @@ export function PinCard({
       </View>
 
       <View style={styles.badges}>
-        <CountdownBadge expiresAt={pin.expiresAt} now={now} urgency={urgency} />
-        <SlotBadge total={pin.slotTotal} taken={pin.slotTaken} />
-        <Text style={styles.fresh}>{formatFreshness(now - pin.createdAt)}の情報</Text>
+        <PinLifeBadge pin={pin} now={now} />
+        {open ? (
+          <Pill tone="neutral">先着枠 {slots}</Pill>
+        ) : (
+          <Pill tone="dead">販売終了</Pill>
+        )}
       </View>
 
-      <View style={styles.footer}>
-        <Text style={styles.seller}>
-          {pin.sellerEmoji} {pin.sellerHandle}
-        </Text>
-        <ScoreBadge score={pin.sellerScore} deals={pin.sellerDeals} />
-      </View>
-    </Pressable>
+      {preview ? <Text style={styles.note}>タップして詳細を見る</Text> : null}
+    </Card>
   );
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: Colors.bg,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-    gap: Spacing.sm,
-  },
-  cardSelected: { borderColor: Colors.brand, backgroundColor: Colors.brandSoft },
-  cardPressed: { opacity: 0.75 },
-  cardClosed: { opacity: 0.55 },
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    card: { gap: Spacing.sm, padding: Spacing.md },
+    cardClosed: { opacity: 0.6 },
 
-  head: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
-  headline: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '800',
-    color: Colors.text,
-    lineHeight: 21,
-    fontFamily: Fonts.sans,
-  },
-  price: { fontSize: 17, fontWeight: '800', color: Colors.text, fontFamily: Fonts.sans },
+    head: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
+    headline: {
+      flex: 1,
+      fontSize: 15,
+      fontWeight: '700',
+      color: colors.text,
+      lineHeight: 22,
+      fontFamily: Fonts.sans,
+    },
+    priceBox: { alignItems: 'flex-end' },
+    price: { fontSize: 20, fontWeight: '800', color: colors.text, fontFamily: Fonts.sans },
 
-  placeRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  place: { flex: 1, fontSize: 12, color: Colors.textSub, fontFamily: Fonts.sans },
-  distance: { fontSize: 12, fontWeight: '700', color: Colors.textFaint, fontFamily: Fonts.sans },
+    placeRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    place: { flex: 1, fontSize: 12, color: colors.textSub, fontFamily: Fonts.sans },
+    distance: { fontSize: 12, fontWeight: '700', color: colors.textFaint, fontFamily: Fonts.sans },
 
-  badges: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  fresh: { fontSize: 11, color: Colors.textFaint, fontFamily: Fonts.sans },
-
-  footer: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  seller: { fontSize: 12, fontWeight: '600', color: Colors.textSub, fontFamily: Fonts.sans },
-});
+    badges: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+    note: { fontSize: 12, color: colors.textSub, lineHeight: 18, fontFamily: Fonts.sans },
+  });
+}

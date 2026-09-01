@@ -53,5 +53,10 @@ export interface MapCanvasProps {
   onMarkerPress?: (id: string) => void;
   onBoundsChange?: (bounds: Bounds) => void;
   onMapPress?: (point: LatLng) => void;
+  /**
+   * false にすると地図は見せるだけで、ドラッグ・ホイール・ピンチを受けない。
+   * スクロール画面の先頭に置くと、指が地図に取られてページが動かなくなる。
+   */
+  interactive?: boolean;
   style?: StyleProp<ViewStyle>;
 }

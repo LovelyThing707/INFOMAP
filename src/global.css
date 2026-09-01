@@ -10,8 +10,20 @@
 html,
 body,
 #root {
+  width: 100%;
   height: 100%;
+  overflow: hidden;
   overscroll-behavior: none;
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* iOS は 16px 未満の入力欄にフォーカスするとページ全体を拡大する */
+input,
+textarea,
+select {
+  font-size: 16px;
 }
 
 /* Leaflet はマーカーを絶対配置するので、既定の枠と背景を消して divIcon の中身だけを見せる */
@@ -19,6 +31,25 @@ body,
   /* タイル読み込み前の下地。Voyager の陸地色に合わせて継ぎ目を目立たせない */
   background: #f6f3ef;
   font-family: var(--font-display);
+  /* 地図上のピンチは Leaflet だけが受け、ページ全体は拡大しない */
+  touch-action: none;
+}
+
+/* 詳細画面の見本地図。縦スワイプはページへ返す */
+.leaflet-container.im-map--static {
+  touch-action: pan-y;
+}
+
+/* RN ScrollView を使わず、指はページの縦スクロールだけに使う */
+.im-page-scroll {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
 }
 
 .leaflet-div-icon {
@@ -43,15 +74,24 @@ body,
   transform: translate(-50%, -100%);
 }
 
+.im-dot-icon {
+  width: 22px !important;
+  height: 22px !important;
+  background: transparent !important;
+  border: none !important;
+  overflow: visible !important;
+}
+
 .im-dot-anchor {
-  width: max-content;
+  width: 16px;
+  height: 16px;
   transform: translate(-50%, -50%);
 }
 
 .im-dot {
   width: 16px;
   height: 16px;
-  border-radius: 8px;
+  border-radius: 50%;
   background: #2563eb;
   border: 3px solid #ffffff;
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.22);

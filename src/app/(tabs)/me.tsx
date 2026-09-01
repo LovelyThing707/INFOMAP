@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { AuthGate } from '@/components/AuthGate';
 import { Screen } from '@/components/Screen';
+import { ThemePreferencePicker } from '@/components/ThemePreferencePicker';
 import { Avatar, ScoreBadge } from '@/components/badges';
 import { Banner, Button, Card, Divider, Input, SectionTitle } from '@/components/ui';
-import { Colors, Fonts, Radius, Spacing } from '@/constants/theme';
+import { Fonts, Radius, Spacing, type ThemeColors } from '@/constants/theme';
 import { LEDGER_LABELS } from '@/data/ledger';
+import type { StorageUsage } from '@/data/repository';
 import { FORBIDDEN_RULES } from '@/domain/catalog';
 import {
   formatClock,
@@ -17,14 +20,18 @@ import {
   RESTRICT_MISS_RATE,
   sellerScore,
 } from '@/domain/rules';
-import type { PayoutRequest, WalletEntry } from '@/domain/types';
+import type { PayoutRequest, UserProfileView, WalletEntry } from '@/domain/types';
 import { useAsync } from '@/hooks/use-async';
+import { useColors } from '@/hooks/use-colors';
 import { useNow } from '@/hooks/use-now';
 import { nowMs } from '@/lib/clock';
 import { repo, useSession } from '@/state/session';
 
 export default function MeScreen() {
+  const colors = useColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const userId = useSession((s) => s.userId);
+  const signedIn = useSession((s) => s.signedIn);
   const users = useSession((s) => s.users);
   const me = useSession((s) => s.me);
   const balance = useSession((s) => s.balance);
@@ -38,18 +45,33 @@ export default function MeScreen() {
   const [payoutError, setPayoutError] = useState<string | null>(null);
 
   const { value: entries } = useAsync<WalletEntry[]>(
-    () => repo.listWalletEntries(userId),
-    [userId, revision],
+    () => (signedIn ? repo.listWalletEntries(userId) : Promise.resolve([])),
+    [userId, revision, signedIn],
     []
   );
   const { value: payouts } = useAsync<PayoutRequest[]>(
-    () => repo.listPayouts(userId),
-    [userId, revision],
+    () => (signedIn ? repo.listPayouts(userId) : Promise.resolve([])),
+    [userId, revision, signedIn],
     []
   );
+  const { value: profile } = useAsync<UserProfileView | null>(
+    () => (signedIn ? repo.getUserProfile(userId, nowMs(), userId) : Promise.resolve(null)),
+    [userId, revision, signedIn],
+    null
+  );
+  const { value: usage } = useAsync<StorageUsage>(() => repo.storageUsage(), [revision], {
+    recordBytes: 0,
+    photoBytes: 0,
+    pins: 0,
+    bounties: 0,
+    ledgerEntries: 0,
+  });
 
-  const score = me ? sellerScore(me.hitCount, me.missCount) : null;
-  const judged = me ? judgedCount(me) : 0;
+  const hits = profile?.hitCount ?? me?.hitCount ?? 0;
+  const misses = profile?.missCount ?? me?.missCount ?? 0;
+  const gones = profile?.goneCount ?? me?.goneCount ?? 0;
+  const score = sellerScore(hits, misses);
+  const judged = judgedCount({ hitCount: hits, missCount: misses });
   const restricted = me ? isRestricted(me, now) : false;
 
   const requestPayout = async () => {
@@ -66,13 +88,20 @@ export default function MeScreen() {
     await bump();
   };
 
+  if (!signedIn) {
+    return (
+      <AuthGate title="マイページ" body="残高と実績を見るには、ログインが必要です" />
+    );
+  }
+
   return (
     <Screen title="マイページ" subtitle="お金と信用">
+      <ThemePreferencePicker />
       <Card style={styles.balanceCard}>
         <View style={styles.balanceRow}>
           <View style={styles.balanceItem}>
             <Text style={styles.balanceLabel}>出金できる</Text>
-            <Text style={[styles.balanceValue, { color: Colors.money }]}>
+            <Text style={[styles.balanceValue, { color: colors.money }]}>
               {formatYen(balance.available)}
             </Text>
           </View>
@@ -85,13 +114,18 @@ export default function MeScreen() {
         <Text style={styles.balanceNote}>
           預かり中は、買い手の判定待ちの売上と、まだ採用が決まっていない依頼の報酬です。確定するまでは出金できません
         </Text>
+        {profile ? (
+          <Text style={styles.balanceNote}>
+            フォロワー {profile.followerCount}人・フォロー {profile.followingCount}人
+          </Text>
+        ) : null}
       </Card>
 
       <View>
         <SectionTitle>出金</SectionTitle>
         <Card style={styles.card}>
           <Text style={styles.body}>
-            申請は週次でまとめて処理します。ここでは残高から引くところまでを再現しています
+            申請した額はすぐに残高から引き、出金として確定します
           </Text>
           <View style={styles.payoutRow}>
             <Input
@@ -102,7 +136,7 @@ export default function MeScreen() {
               style={styles.payoutInput}
             />
             <Button
-              label="申請"
+              label="出金する"
               onPress={requestPayout}
               disabled={!payoutAmount}
               style={styles.payoutButton}
@@ -113,7 +147,7 @@ export default function MeScreen() {
             <View key={payout.id} style={styles.payoutItem}>
               <Text style={styles.body}>{formatYen(payout.amount)}</Text>
               <Text style={styles.muted}>
-                {new Date(payout.createdAt).toLocaleDateString('ja-JP')}・受付済み
+                {new Date(payout.createdAt).toLocaleDateString('ja-JP')}・出金済み
               </Text>
             </View>
           ))}
@@ -121,7 +155,7 @@ export default function MeScreen() {
       </View>
 
       <View>
-        <SectionTitle>出品者としての信用</SectionTitle>
+        <SectionTitle>出した情報の正確さ</SectionTitle>
         <Card style={styles.card}>
           <View style={styles.scoreRow}>
             <Avatar emoji={me?.emoji ?? '❔'} size={40} />
@@ -132,20 +166,24 @@ export default function MeScreen() {
           </View>
           <Divider />
           <Text style={styles.body}>
-            当たり {me?.hitCount ?? 0}件・外れ {me?.missCount ?? 0}件
+            情報どおり {hits}件・違っていた {misses}件
+          </Text>
+          <Text style={styles.muted}>
+            このほかに「着いたら無くなっていた」が {gones}件あります。
+            返金はされますが、腐る情報では避けられないので記録には数えていません
           </Text>
           {restricted && me?.restrictedUntil ? (
             <Banner
               tone="danger"
               icon="alert-circle"
               title="いま出品できません"
-              body={`外れの割合が${Math.round(RESTRICT_MISS_RATE * 100)}%を超えたため、${new Date(
+              body={`情報が違っていたという申告が${Math.round(RESTRICT_MISS_RATE * 100)}%を超えたため、${new Date(
                 me.restrictedUntil
-              ).toLocaleString('ja-JP')}まで出品を止めています。解除後、当たりの申告が増えれば再び制限はかかりません`}
+              ).toLocaleString('ja-JP')}まで出品を止めています。解除後、情報どおりという申告が増えれば再び制限はかかりません`}
             />
           ) : (
             <Text style={styles.muted}>
-              判定が{RESTRICT_MIN_JUDGED}件を超えたあと、外れが
+              買い手からの申告が{RESTRICT_MIN_JUDGED}件を超えたあと、「違っていた」が
               {Math.round(RESTRICT_MISS_RATE * 100)}%以上になると24時間出品できなくなります
             </Text>
           )}
@@ -171,7 +209,7 @@ export default function MeScreen() {
                     <Text
                       style={[
                         styles.entryAmount,
-                        { color: entry.availableDelta > 0 ? Colors.money : Colors.text },
+                        { color: entry.availableDelta > 0 ? colors.money : colors.text },
                       ]}>
                       {entry.availableDelta > 0 ? '+' : ''}
                       {formatYen(entry.availableDelta)}
@@ -196,7 +234,7 @@ export default function MeScreen() {
         <Card style={styles.card}>
           {FORBIDDEN_RULES.map((rule) => (
             <View key={rule} style={styles.ruleItem}>
-              <Ionicons name="close-circle" size={14} color={Colors.textFaint} />
+              <Ionicons name="close-circle" size={14} color={colors.textFaint} />
               <Text style={styles.ruleText}>{rule}</Text>
             </View>
           ))}
@@ -207,94 +245,163 @@ export default function MeScreen() {
       </View>
 
       <View>
-        <SectionTitle>動作確認用</SectionTitle>
+        <SectionTitle>位置情報の扱い</SectionTitle>
         <Card style={styles.card}>
-          <Text style={styles.muted}>
-            売り手と買い手、依頼者と報告者の往復を1台で試すためのユーザー切替です
+          <Text style={styles.body}>
+            使うのは次の3つの場面だけです。近くの情報を並べるとき、写真を撮ったとき、
+            依頼に「向かう」を押したときです。
           </Text>
-          <View style={styles.userGrid}>
-            {users.map((user) => {
-              const active = user.id === userId;
-              return (
-                <Pressable
-                  key={user.id}
-                  onPress={() => switchUser(user.id)}
-                  style={[styles.userChip, active && styles.userChipActive]}>
-                  <Text style={styles.userEmoji}>{user.emoji}</Text>
-                  <Text style={[styles.userName, active && styles.userNameActive]}>
-                    {user.handle}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          <Button label="データを初期状態に戻す" variant="danger" onPress={() => resetAll()} />
+          <Text style={styles.muted}>
+            撮影地点と応募地点は、受け取った時点で対象からの距離に変換して、
+            緯度経度そのものは保存しません。他の利用者に渡るのも距離だけで、
+            あなたがどこにいたかは分かりません。
+          </Text>
+          <Text style={styles.muted}>
+            移動中の追跡はしていません。位置を読むのは上の3つの操作をした瞬間だけで、
+            アプリを閉じている間は何も取得しません。
+          </Text>
+          <Text style={styles.muted}>
+            端末が位置の偽装を申告した場合、その写真は「位置が偽装されています」と表示され、
+            懸賞の自動採用からも外れます。
+          </Text>
         </Card>
       </View>
+
+      <View>
+        <SectionTitle>保存している量</SectionTitle>
+        <Card style={styles.card}>
+          <View style={styles.usageRow}>
+            <Usage label="記録" value={formatBytes(usage.recordBytes)} />
+            <Usage label="写真" value={formatBytes(usage.photoBytes)} />
+            <Usage label="台帳" value={`${usage.ledgerEntries}行`} />
+          </View>
+          <Text style={styles.muted}>
+            出品 {usage.pins}件・依頼 {usage.bounties}件。写真は端末のファイルに置いていて、
+            期限切れから24時間で自動的に削除されます。記録のほうは残高の元になるので消しません
+          </Text>
+        </Card>
+      </View>
+
+      {/*
+        ユーザー切替は押すだけで他人になれる。本番ビルドに残すと、
+        あとから認証を入れても丸ごと迂回されるので、開発ビルドだけに出す。
+        データの初期化も同じ理由でここに置く。
+      */}
+      {__DEV__ ? (
+        <View>
+          <SectionTitle>動作確認用（開発ビルドのみ）</SectionTitle>
+          <Card style={styles.card}>
+            <Text style={styles.muted}>
+              売り手と買い手、依頼者と報告者の往復を1台で試すためのユーザー切替です。
+              本番のビルドには含まれません
+            </Text>
+            <View style={styles.userGrid}>
+              {users.map((user) => {
+                const active = user.id === userId;
+                return (
+                  <Pressable
+                    key={user.id}
+                    onPress={() => switchUser(user.id)}
+                    style={[styles.userChip, active && styles.userChipActive]}>
+                    <Text style={styles.userEmoji}>{user.emoji}</Text>
+                    <Text style={[styles.userName, active && styles.userNameActive]}>
+                      {user.handle}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Button label="データを初期状態に戻す" variant="danger" onPress={() => resetAll()} />
+          </Card>
+        </View>
+      ) : null}
     </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  balanceCard: { gap: Spacing.md },
-  balanceRow: { flexDirection: 'row', alignItems: 'center' },
-  balanceItem: { flex: 1, gap: 2 },
-  balanceDivider: { width: 1, height: 36, backgroundColor: Colors.border },
-  balanceLabel: { fontSize: 12, color: Colors.textSub, fontFamily: Fonts.sans },
-  balanceValue: { fontSize: 24, fontWeight: '800', color: Colors.text, fontFamily: Fonts.sans },
-  balanceNote: { fontSize: 11, color: Colors.textFaint, lineHeight: 17, fontFamily: Fonts.sans },
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  return `${Math.max(0, Math.round(bytes / 1024))}KB`;
+}
 
-  card: { gap: Spacing.md, padding: Spacing.md },
-  body: { fontSize: 13, color: Colors.text, lineHeight: 20, fontFamily: Fonts.sans },
-  muted: { fontSize: 12, color: Colors.textSub, lineHeight: 18, fontFamily: Fonts.sans },
-  errorText: { fontSize: 12, color: Colors.danger, fontWeight: '600', fontFamily: Fonts.sans },
+function Usage({ label, value }: { label: string; value: string }) {
+  const colors = useColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <View style={styles.usageItem}>
+      <Text style={styles.usageLabel}>{label}</Text>
+      <Text style={styles.usageValue}>{value}</Text>
+    </View>
+  );
+}
 
-  payoutRow: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'center' },
-  payoutInput: { flex: 1 },
-  payoutButton: { minWidth: 88 },
-  payoutItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    balanceCard: { gap: Spacing.md },
+    balanceRow: { flexDirection: 'row', alignItems: 'center' },
+    balanceItem: { flex: 1, gap: 2 },
+    balanceDivider: { width: 1, height: 36, backgroundColor: colors.border },
+    balanceLabel: { fontSize: 12, color: colors.textSub, fontFamily: Fonts.sans },
+    balanceValue: { fontSize: 24, fontWeight: '800', color: colors.text, fontFamily: Fonts.sans },
+    balanceNote: { fontSize: 11, color: colors.textFaint, lineHeight: 17, fontFamily: Fonts.sans },
 
-  scoreRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  scoreText: { gap: 4 },
-  handle: { fontSize: 16, fontWeight: '800', color: Colors.text, fontFamily: Fonts.sans },
+    card: { gap: Spacing.md, padding: Spacing.md },
+    body: { fontSize: 13, color: colors.text, lineHeight: 20, fontFamily: Fonts.sans },
+    muted: { fontSize: 12, color: colors.textSub, lineHeight: 18, fontFamily: Fonts.sans },
+    errorText: { fontSize: 12, color: colors.danger, fontWeight: '600', fontFamily: Fonts.sans },
 
-  entry: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    paddingVertical: 7,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  entryLeft: { flex: 1, gap: 1 },
-  entryKind: { fontSize: 13, fontWeight: '700', color: Colors.text, fontFamily: Fonts.sans },
-  entryMemo: { fontSize: 11, color: Colors.textSub, fontFamily: Fonts.sans },
-  entryRight: { alignItems: 'flex-end' },
-  entryAmount: { fontSize: 14, fontWeight: '800', fontFamily: Fonts.sans },
-  entryPending: { fontSize: 11, color: Colors.warn, fontWeight: '600', fontFamily: Fonts.sans },
-  entryTime: { fontSize: 10, color: Colors.textFaint, fontFamily: Fonts.sans },
+    payoutRow: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'center' },
+    payoutInput: { flex: 1 },
+    payoutButton: { minWidth: 88 },
+    payoutItem: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 4,
+    },
 
-  ruleItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  ruleText: { flex: 1, fontSize: 12, color: Colors.textSub, fontFamily: Fonts.sans },
+    scoreRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+    scoreText: { gap: 4 },
+    handle: { fontSize: 16, fontWeight: '800', color: colors.text, fontFamily: Fonts.sans },
 
-  userGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  userChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  userChipActive: { borderColor: Colors.brand, backgroundColor: Colors.brandSoft },
-  userEmoji: { fontSize: 15 },
-  userName: { fontSize: 13, fontWeight: '600', color: Colors.textSub, fontFamily: Fonts.sans },
-  userNameActive: { color: Colors.brand, fontWeight: '800' },
-});
+    entry: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.md,
+      paddingVertical: 7,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    entryLeft: { flex: 1, gap: 1 },
+    entryKind: { fontSize: 13, fontWeight: '700', color: colors.text, fontFamily: Fonts.sans },
+    entryMemo: { fontSize: 11, color: colors.textSub, fontFamily: Fonts.sans },
+    entryRight: { alignItems: 'flex-end' },
+    entryAmount: { fontSize: 14, fontWeight: '800', fontFamily: Fonts.sans },
+    entryPending: { fontSize: 11, color: colors.warn, fontWeight: '600', fontFamily: Fonts.sans },
+    entryTime: { fontSize: 10, color: colors.textFaint, fontFamily: Fonts.sans },
+
+    usageRow: { flexDirection: 'row', gap: Spacing.sm },
+    usageItem: { flex: 1, gap: 2 },
+    usageLabel: { fontSize: 11, color: colors.textSub, fontFamily: Fonts.sans },
+    usageValue: { fontSize: 16, fontWeight: '800', color: colors.text, fontFamily: Fonts.sans },
+
+    ruleItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    ruleText: { flex: 1, fontSize: 12, color: colors.textSub, fontFamily: Fonts.sans },
+
+    userGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+    userChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: Radius.pill,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    userChipActive: { borderColor: colors.brand, backgroundColor: colors.brandSoft },
+    userEmoji: { fontSize: 15 },
+    userName: { fontSize: 13, fontWeight: '600', color: colors.textSub, fontFamily: Fonts.sans },
+    userNameActive: { color: colors.brand, fontWeight: '800' },
+  });
+}

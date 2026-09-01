@@ -1,38 +1,49 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import MapCanvas from '@/components/map/MapCanvas';
 import type { MapCameraTarget } from '@/components/map/types';
 import { Banner, Button, Checkbox, ChoiceRow, Field, Input, KeyValue } from '@/components/ui';
 import { AREA } from '@/config/area';
-import { Colors, Fonts, MAX_CONTENT_WIDTH, Radius, Spacing } from '@/constants/theme';
+import { Fonts, MAX_CONTENT_WIDTH, Radius, Spacing, type ThemeColors } from '@/constants/theme';
 import { DEFAULT_CATEGORY, FORBIDDEN_RULES } from '@/domain/catalog';
 import {
   BOUNTY_EXPIRY_CHOICES_MIN,
   BOUNTY_RADIUS_CHOICES_M,
   feeFor,
+  formatStamp,
   formatYen,
   isInsideArea,
   netFor,
   REWARD_CHOICES,
 } from '@/domain/rules';
 import type { LatLng } from '@/domain/types';
+import { useColors } from '@/hooks/use-colors';
 import { useUserLocation } from '@/hooks/use-location';
+import { useNow } from '@/hooks/use-now';
 import { nowMs } from '@/lib/clock';
+import { AuthGate } from '@/components/AuthGate';
 import { closeModal } from '@/lib/navigation';
 import { repo, useSession } from '@/state/session';
 
 export default function NewRequestScreen() {
+  const colors = useColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const userId = useSession((s) => s.userId);
+  const signedIn = useSession((s) => s.signedIn);
   const balance = useSession((s) => s.balance);
   const bump = useSession((s) => s.bump);
   const location = useUserLocation();
+  const now = useNow(30000);
 
   const [override, setOverride] = useState<LatLng | null>(null);
   const [radiusM, setRadiusM] = useState<number>(600);
   const [areaLabel, setAreaLabel] = useState('');
   const [targetText, setTargetText] = useState('');
+  const [placeHint, setPlaceHint] = useState('');
+  const [photoWanted, setPhotoWanted] = useState('');
+  const [payIfAbsent, setPayIfAbsent] = useState(true);
   const [reward, setReward] = useState<number>(200);
   const [acceptCount, setAcceptCount] = useState<number>(1);
   const [ttl, setTtl] = useState<number>(60);
@@ -61,6 +72,9 @@ export default function NewRequestScreen() {
         radiusM,
         areaLabel,
         targetText,
+        placeHint: placeHint.trim() || null,
+        photoWanted: photoWanted.trim() || null,
+        payIfAbsent,
         reward,
         acceptCount,
         ttlMinutes: ttl,
@@ -83,6 +97,15 @@ export default function NewRequestScreen() {
     await bump();
     closeModal('/requests');
   };
+
+  if (!signedIn) {
+    return (
+      <AuthGate
+        title="依頼を出す"
+        body="報酬を置いて頼むには、ログインが必要です"
+      />
+    );
+  }
 
   return (
     <ScrollView
@@ -129,6 +152,42 @@ export default function NewRequestScreen() {
         />
       </Field>
 
+      {/* ここから3つは、書いておかないと応募者から聞かれることになる項目。
+          先に埋めてもらったほうが、双方の待ち時間が減る */}
+      <Field label="対象の店舗・場所" hint="任意。書くと「どの店ですか」と聞かれずに済む">
+        <Input
+          value={placeHint}
+          onChangeText={setPlaceHint}
+          placeholder="例: 4F PCパーツ売場、エスカレーター上がって右奥"
+        />
+      </Field>
+
+      <Field label="欲しい写真" hint="任意。何が写っていれば足りるか">
+        <Input
+          value={photoWanted}
+          onChangeText={setPhotoWanted}
+          placeholder="例: 値札の数字が読める写真"
+        />
+      </Field>
+
+      <Field
+        label="対象が無かった場合"
+        hint="いちばん聞かれるところ。決めておかないと応募されにくい">
+        <ChoiceRow
+          options={[
+            { id: 'pay', label: '無くても報酬を出す' },
+            { id: 'skip', label: '有った場合のみ' },
+          ]}
+          value={payIfAbsent ? 'pay' : 'skip'}
+          onChange={(id) => setPayIfAbsent(id === 'pay')}
+        />
+        <Text style={styles.note}>
+          {payIfAbsent
+            ? '「無かった」も答えのうち、という扱いです。行った人の労力に払うぶん、応募は集まりやすくなります'
+            : '空振りだった人には払いません。報酬を高めにしないと敬遠されます'}
+        </Text>
+      </Field>
+
       <Field label="報酬">
         <ChoiceRow
           options={REWARD_CHOICES.map((v) => ({ id: v, label: formatYen(v) }))}
@@ -150,12 +209,16 @@ export default function NewRequestScreen() {
         />
       </Field>
 
-      <Field label="期限">
+      {/* 「いつまでに着けばいいか」は必ず聞かれる。質問させる前にここで決めさせる */}
+      <Field label="報告の締め切り" hint="この時刻を過ぎた報告は受け付けません">
         <ChoiceRow
-          options={BOUNTY_EXPIRY_CHOICES_MIN.map((m) => ({ id: m, label: `${m}分` }))}
+          options={BOUNTY_EXPIRY_CHOICES_MIN.map((m) => ({ id: m, label: `${m}分後` }))}
           value={ttl}
           onChange={setTtl}
         />
+        <Text style={styles.note}>
+          {formatStamp(now + ttl * 60 * 1000, now)} まで。応募した人にもこの時刻が表示されます
+        </Text>
       </Field>
 
       <View style={styles.money}>
@@ -172,7 +235,7 @@ export default function NewRequestScreen() {
         <View style={styles.rules}>
           {FORBIDDEN_RULES.map((rule) => (
             <View key={rule} style={styles.ruleItem}>
-              <Ionicons name="close-circle" size={13} color={Colors.textFaint} />
+              <Ionicons name="close-circle" size={13} color={colors.textFaint} />
               <Text style={styles.ruleText}>{rule}</Text>
             </View>
           ))}
@@ -196,27 +259,30 @@ export default function NewRequestScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.bg },
-  content: {
-    padding: Spacing.lg,
-    paddingBottom: 48,
-    gap: Spacing.lg,
-    width: '100%',
-    maxWidth: MAX_CONTENT_WIDTH,
-    alignSelf: 'center',
-  },
-  mapBox: {
-    height: 210,
-    borderRadius: Radius.md,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  money: { backgroundColor: Colors.bgAlt, borderRadius: Radius.md, padding: Spacing.md },
-  moneyNote: { fontSize: 11, color: Colors.textFaint, marginTop: 6, fontFamily: Fonts.sans },
-  rules: { gap: 5 },
-  ruleItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  ruleText: { flex: 1, fontSize: 12, color: Colors.textSub, fontFamily: Fonts.sans },
-  errorText: { fontSize: 13, color: Colors.danger, fontWeight: '600', fontFamily: Fonts.sans },
-});
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    content: {
+      padding: Spacing.lg,
+      paddingBottom: 48,
+      gap: Spacing.lg,
+      width: '100%',
+      maxWidth: MAX_CONTENT_WIDTH,
+      alignSelf: 'center',
+    },
+    mapBox: {
+      height: 210,
+      borderRadius: Radius.md,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    money: { backgroundColor: colors.bgAlt, borderRadius: Radius.md, padding: Spacing.md },
+    moneyNote: { fontSize: 11, color: colors.textFaint, marginTop: 6, fontFamily: Fonts.sans },
+    note: { fontSize: 11, color: colors.textSub, lineHeight: 17, fontFamily: Fonts.sans },
+    rules: { gap: 5 },
+    ruleItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    ruleText: { flex: 1, fontSize: 12, color: colors.textSub, fontFamily: Fonts.sans },
+    errorText: { fontSize: 13, color: colors.danger, fontWeight: '600', fontFamily: Fonts.sans },
+  });
+}

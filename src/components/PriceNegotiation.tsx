@@ -1,10 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Colors, Fonts, Radius, Spacing } from '@/constants/theme';
+import { Fonts, Radius, Spacing, type ThemeColors } from '@/constants/theme';
 import { formatYen, lowerSuggestions, raiseSuggestions } from '@/domain/rules';
 import type { AskTargetKind, PriceAskSummary } from '@/domain/types';
+import { useColors } from '@/hooks/use-colors';
+import { requireSignedIn } from '@/lib/auth-gate';
 import { nowMs } from '@/lib/clock';
 import { repo, useSession } from '@/state/session';
 
@@ -32,6 +34,8 @@ export function PriceNegotiation({
   summary: PriceAskSummary;
   closed?: boolean;
 }) {
+  const colors = useColors();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const userId = useSession((s) => s.userId);
   const bump = useSession((s) => s.bump);
   const [open, setOpen] = useState(false);
@@ -42,9 +46,16 @@ export function PriceNegotiation({
   const verb = lowering ? '値下げ' : '値上げ';
   const suggestions = lowering ? lowerSuggestions(amount) : raiseSuggestions(amount);
 
+  // 売り物を買う人はその場から動かないので「動く」とは言わない。
+  // 依頼に応じる人は実際に現場へ行くので、そちらだけ「行く」で通す。
+  const word = lowering
+    ? { ask: 'いくらなら買いますか', told: '買う', crowd: '買います' }
+    : { ask: 'いくらなら行きますか', told: '行く', crowd: '応募します' };
+
   if (closed) return null;
 
   const submit = async (desired: number) => {
+    if (!requireSignedIn()) return;
     setError(null);
     const result = await repo.askPriceChange(targetKind, targetId, userId, desired, nowMs());
     if (!result.ok) {
@@ -56,6 +67,7 @@ export function PriceNegotiation({
   };
 
   const withdraw = async () => {
+    if (!requireSignedIn()) return;
     await repo.withdrawPriceAsk(targetKind, targetId, userId);
     await bump();
   };
@@ -89,14 +101,15 @@ export function PriceNegotiation({
           <Ionicons
             name={lowering ? 'trending-down' : 'trending-up'}
             size={15}
-            color={lowering ? Colors.brand : Colors.money}
+            color={lowering ? colors.brand : colors.money}
           />
           <Text style={styles.panelTitle}>
             {summary.count}人が{verb}を待っています
           </Text>
         </View>
         <Text style={styles.panelBody}>
-          希望の中央値は {formatYen(summary.median)}。ここに合わせると、待っている人の半分以上が動きます
+          希望の中央値は {formatYen(summary.median)}。ここに合わせると、待っている人の半分以上が
+          {word.crowd}
         </Text>
         <View style={styles.chipRow}>
           {options.map((value, index) => (
@@ -124,9 +137,9 @@ export function PriceNegotiation({
   if (summary.mine !== null) {
     return (
       <View style={styles.askedRow}>
-        <Ionicons name="checkmark-circle" size={15} color={Colors.textSub} />
+        <Ionicons name="checkmark-circle" size={15} color={colors.textSub} />
         <Text style={styles.askedText}>
-          {formatYen(summary.mine)}なら動く、と伝えました
+          {formatYen(summary.mine)}なら{word.told}、と伝えました
           {summary.count > 1 ? `（ほかに${summary.count - 1}人）` : ''}
         </Text>
         <Pressable onPress={withdraw} hitSlop={8}>
@@ -144,7 +157,7 @@ export function PriceNegotiation({
         <Ionicons
           name={lowering ? 'trending-down' : 'trending-up'}
           size={15}
-          color={Colors.textSub}
+          color={colors.textSub}
         />
         <Text style={styles.askButtonText}>{verb}をお願いする</Text>
         {summary.count > 0 ? (
@@ -156,7 +169,7 @@ export function PriceNegotiation({
 
   return (
     <View style={styles.askOpen}>
-      <Text style={styles.askPrompt}>いくらなら動きますか</Text>
+      <Text style={styles.askPrompt}>{word.ask}</Text>
       <View style={styles.chipRow}>
         {suggestions.map((value) => (
           <Pressable key={value} onPress={() => submit(value)} style={styles.chip}>
@@ -172,67 +185,74 @@ export function PriceNegotiation({
   );
 }
 
-const styles = StyleSheet.create({
-  panel: {
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    gap: 6,
-    borderWidth: 1,
-  },
-  panelSale: { backgroundColor: Colors.brandSoft, borderColor: '#C7D8FF' },
-  panelBounty: { backgroundColor: Colors.moneySoft, borderColor: '#A7E7CB' },
-  panelHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  panelTitle: { fontSize: 13, fontWeight: '800', color: Colors.text, fontFamily: Fonts.sans },
-  panelBody: { fontSize: 12, color: Colors.textSub, lineHeight: 18, fontFamily: Fonts.sans },
-  note: { fontSize: 11, color: Colors.textFaint, fontFamily: Fonts.sans },
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    panel: {
+      borderRadius: Radius.md,
+      padding: Spacing.md,
+      gap: 6,
+      borderWidth: 1,
+    },
+    panelSale: { backgroundColor: colors.brandSoft, borderColor: colors.borderStrong },
+    panelBounty: { backgroundColor: colors.moneySoft, borderColor: colors.borderStrong },
+    panelHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+    panelTitle: { fontSize: 13, fontWeight: '800', color: colors.text, fontFamily: Fonts.sans },
+    panelBody: { fontSize: 12, color: colors.textSub, lineHeight: 18, fontFamily: Fonts.sans },
+    note: { fontSize: 11, color: colors.textFaint, fontFamily: Fonts.sans },
 
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.bg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  chipPrimary: { backgroundColor: Colors.text, borderColor: Colors.text },
-  chipText: { fontSize: 12, fontWeight: '700', color: Colors.text, fontFamily: Fonts.sans },
-  chipTextPrimary: { color: '#fff' },
+    chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
+    chip: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: Radius.pill,
+      backgroundColor: colors.bg,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    chipPrimary: { backgroundColor: colors.text, borderColor: colors.text },
+    chipText: { fontSize: 12, fontWeight: '700', color: colors.text, fontFamily: Fonts.sans },
+    chipTextPrimary: { color: colors.bg },
 
-  cancelChip: { paddingHorizontal: 12, paddingVertical: 8 },
-  cancelText: { fontSize: 12, color: Colors.textFaint, fontFamily: Fonts.sans },
+    cancelChip: { paddingHorizontal: 12, paddingVertical: 8 },
+    cancelText: { fontSize: 12, color: colors.textFaint, fontFamily: Fonts.sans },
 
-  askButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderStyle: 'dashed',
-  },
-  askButtonText: { fontSize: 12, fontWeight: '700', color: Colors.textSub, fontFamily: Fonts.sans },
-  askButtonCount: {
-    marginLeft: 'auto',
-    fontSize: 11,
-    color: Colors.textFaint,
-    fontFamily: Fonts.sans,
-  },
+    askButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingVertical: 9,
+      paddingHorizontal: 12,
+      borderRadius: Radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderStyle: 'dashed',
+    },
+    askButtonText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textSub,
+      fontFamily: Fonts.sans,
+    },
+    askButtonCount: {
+      marginLeft: 'auto',
+      fontSize: 11,
+      color: colors.textFaint,
+      fontFamily: Fonts.sans,
+    },
 
-  askOpen: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-    gap: 4,
-  },
-  askPrompt: { fontSize: 12, fontWeight: '700', color: Colors.text, fontFamily: Fonts.sans },
+    askOpen: {
+      borderRadius: Radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: Spacing.md,
+      gap: 4,
+    },
+    askPrompt: { fontSize: 12, fontWeight: '700', color: colors.text, fontFamily: Fonts.sans },
 
-  askedRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  askedText: { flex: 1, fontSize: 12, color: Colors.textSub, fontFamily: Fonts.sans },
-  withdraw: { fontSize: 12, fontWeight: '700', color: Colors.danger, fontFamily: Fonts.sans },
+    askedRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    askedText: { flex: 1, fontSize: 12, color: colors.textSub, fontFamily: Fonts.sans },
+    withdraw: { fontSize: 12, fontWeight: '700', color: colors.danger, fontFamily: Fonts.sans },
 
-  error: { fontSize: 12, color: Colors.danger, fontWeight: '600', fontFamily: Fonts.sans },
-});
+    error: { fontSize: 12, color: colors.danger, fontWeight: '600', fontFamily: Fonts.sans },
+  });
+}

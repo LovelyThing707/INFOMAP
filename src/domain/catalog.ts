@@ -59,7 +59,7 @@ export function stockLabel(state: StockState): string {
  */
 export const FORBIDDEN_RULES = [
   '特定の個人がどこにいるか（私人の所在・追跡）',
-  '相場を動かすことを目的とした現地の観測',
+  '見た事実ではない予想（買い目、設定、勝ち負けの見立て）',
   '立入禁止の場所や、撮影が禁止されている場所の中身',
   '他人の顔や名前、車のナンバーが読み取れる写真',
 ];

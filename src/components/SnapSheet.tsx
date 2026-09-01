@@ -8,7 +8,8 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 
-import { Colors, Radius } from '@/constants/theme';
+import { Radius } from '@/constants/theme';
+import { useColors } from '@/hooks/use-colors';
 
 /**
  * @gorhom/bottom-sheet は Reanimated 4 との組み合わせで SDK 54 以降に不具合が続いているため
@@ -72,6 +73,7 @@ function endDrag(
 }
 
 export function SnapSheet({ snapPoints, index, onIndexChange, header, children }: SnapSheetProps) {
+  const colors = useColors();
   const maxHeight = snapPoints[snapPoints.length - 1];
   const offsets = useMemo(() => snapPoints.map((h) => maxHeight - h), [snapPoints, maxHeight]);
   const clamped = Math.max(0, Math.min(index, snapPoints.length - 1));
@@ -108,12 +110,21 @@ export function SnapSheet({ snapPoints, index, onIndexChange, header, children }
   }));
 
   return (
-    <Animated.View style={[styles.sheet, { height: maxHeight }, animatedStyle]}>
+    <Animated.View
+      style={[
+        styles.sheet,
+        {
+          height: maxHeight,
+          backgroundColor: colors.bg,
+          borderColor: colors.border,
+        },
+        animatedStyle,
+      ]}>
       <GestureDetector gesture={pan}>
         <View
           style={styles.header}
           onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}>
-          <View style={styles.grabber} />
+          <View style={[styles.grabber, { backgroundColor: colors.bgSunken }]} />
           {header}
         </View>
       </GestureDetector>
@@ -128,11 +139,9 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: Colors.bg,
     borderTopLeftRadius: Radius.lg + 6,
     borderTopRightRadius: Radius.lg + 6,
     borderTopWidth: 1,
-    borderColor: Colors.border,
     shadowColor: '#0F172A',
     shadowOpacity: 0.16,
     shadowRadius: 18,
@@ -146,7 +155,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 4,
     borderRadius: 2,
-    backgroundColor: Colors.bgSunken,
     marginBottom: 6,
   },
   body: { overflow: 'hidden' },

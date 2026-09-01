@@ -5,16 +5,23 @@ import {
   boundsContain,
   canPost,
   distanceM,
+  evidenceOfStored,
   feeFor,
   isAutoAcceptDue,
+  isSellerFault,
   isBountyOpen,
+  isClaimStale,
+  isAllowedPinTtl,
   isExpired,
   isInsideArea,
   isOnMap,
+  compareDeadline,
   isPurchasable,
   isSettleable,
   isSoldOut,
+  MAX_ACTIVE_CLAIMS,
   MAX_PRICE,
+  REPORTS_TO_VOID,
   medianOf,
   MIN_PRICE,
   RESTRICT_DURATION_MS,
@@ -43,6 +50,7 @@ import type {
 } from '@/domain/types';
 
 import { newId } from './ids';
+import { dropPhoto, keepPhoto, photoBytes, sweepPhotos } from './photoStore';
 import {
   balanceOf,
   holdForBounty,
@@ -63,12 +71,19 @@ import type {
   PayoutResult,
   PurchaseResult,
   ReportResult,
+  ReportResultKind,
   SellerPinView,
 } from './repository';
 import { buildSeed, DB_VERSION, recycleSamples, type DB } from './seed';
 
 const STORAGE_KEY = 'infomap:db:v1';
 const MIN = 60 * 1000;
+
+/**
+ * 期限切れから写真を消すまでの猶予。
+ * 買った人が後から見返す時間は残しつつ、無期限には持たない。
+ */
+const PHOTO_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 let cache: DB | null = null;
 
@@ -88,6 +103,14 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** 保存領域が満杯で書けなかったとき。呼び出し側が握りつぶさないよう型で示す */
+export class StorageFullError extends Error {
+  constructor() {
+    super('保存できる容量を超えました');
+    this.name = 'StorageFullError';
+  }
+}
+
 async function loadDb(): Promise<DB> {
   if (cache) return cache;
   try {
@@ -97,9 +120,11 @@ async function loadDb(): Promise<DB> {
       if (parsed && parsed.version === DB_VERSION) {
         cache = parsed;
         // 前回から時間が空いていると全部腐っているので、消えたぶんを補充してから返す
-        if (recycleSamples(cache, Date.now())) {
-          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(cache));
-        }
+        const recycled = recycleSamples(cache, Date.now());
+        const expired = expirePhotos(cache, Date.now());
+        if (recycled || expired) await persist(cache);
+        // 出品を途中でやめたときなどに残る、参照のないファイルを片付ける
+        void sweepPhotos(livePhotoUris(cache));
         return cache;
       }
     }
@@ -111,9 +136,60 @@ async function loadDb(): Promise<DB> {
   return cache;
 }
 
+/**
+ * 保存に失敗したら、メモリ上の変更も捨てる。
+ *
+ * ここで書き込みだけ失敗して画面が進むと、成功したように見えてリロードで消える。
+ * いちばん質の悪い壊れ方なので、キャッシュを捨てて次回に保存済みの状態から読み直させる。
+ */
 async function persist(db: DB): Promise<void> {
-  cache = db;
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  try {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    cache = db;
+  } catch {
+    cache = null;
+    throw new StorageFullError();
+  }
+}
+
+/** いま参照されている写真の場所 */
+function livePhotoUris(db: DB): Set<string> {
+  const uris = new Set<string>();
+  for (const pin of db.pins) if (pin.photoUri) uris.add(pin.photoUri);
+  for (const app of db.applications) if (app.photoUri) uris.add(app.photoUri);
+  return uris;
+}
+
+/**
+ * 期限切れから一定期間たった写真を実際に消す。
+ *
+ * 「期限が来たら消える」と言っている以上、消えたことにするだけでなく本当に捨てる。
+ * 本文は取引の記録として残し、容量の大半を占める写真だけを落とす。
+ */
+function expirePhotos(db: DB, now: number): boolean {
+  let changed = false;
+  const drop = (uri: string | null) => {
+    if (uri) void dropPhoto(uri);
+  };
+
+  for (const pin of db.pins) {
+    if (!pin.photoUri) continue;
+    if (pin.expiresAt === null) continue;
+    if (now - pin.expiresAt < PHOTO_RETENTION_MS) continue;
+    drop(pin.photoUri);
+    pin.photoUri = null;
+    changed = true;
+  }
+
+  for (const app of db.applications) {
+    if (!app.photoUri || app.reportedAt === null) continue;
+    if (now - app.reportedAt < PHOTO_RETENTION_MS) continue;
+    drop(app.photoUri);
+    app.photoUri = null;
+    changed = true;
+  }
+
+  return changed;
 }
 
 function write<T>(fn: (db: DB) => T): Promise<T> {
@@ -159,6 +235,10 @@ function toPublic(db: DB, pin: Pin, viewerId: UserId): PublicPin {
     ...toPublicShape(pin),
     ...badgeOf(db, pin.sellerId),
     asks: asksFor(db, 'pin', pin.id, viewerId),
+    // 写真そのものは渡さないが、いつどこで撮られたかだけは買う前に見せる
+    evidence: evidenceOfStored(pin.proof, pin.createdAt),
+    likeCount: db.pinLikes.filter((like) => like.pinId === pin.id).length,
+    likedByMe: db.pinLikes.some((like) => like.pinId === pin.id && like.userId === viewerId),
   };
 }
 
@@ -249,6 +329,15 @@ function runTick(db: DB, now: number): boolean {
     changed = true;
   }
 
+  // 「向かう」を押したまま報告が来ないものを降ろす。
+  // これがないと放置された応募が人数に残り続けて、混み具合の表示が嘘になる
+  for (const app of db.applications) {
+    if (!isClaimStale(app, now)) continue;
+    app.status = 'lapsed';
+    app.decidedAt = now;
+    changed = true;
+  }
+
   for (const app of db.applications) {
     if (app.status !== 'reported') continue;
     const bounty = db.bounties.find((b) => b.id === app.bountyId);
@@ -272,12 +361,33 @@ function runTick(db: DB, now: number): boolean {
 function viewBounty(db: DB, bounty: Bounty, viewerId: UserId): BountyView {
   const apps = db.applications.filter((a) => a.bountyId === bounty.id);
   const requester = db.users.find((u) => u.id === bounty.requesterId);
+  const heading = apps.filter((a) => a.status === 'heading');
+  const questions = db.questions
+    .filter((q) => q.bountyId === bounty.id)
+    .sort((a, b) => a.askedAt - b.askedAt)
+    .map((q) => {
+      const asker = db.users.find((u) => u.id === q.askedBy);
+      return {
+        ...q,
+        askedByHandle: asker?.handle ?? q.askedByHandle ?? 'ゲスト',
+        askedByEmoji: asker?.emoji ?? q.askedByEmoji ?? '🙂',
+      };
+    });
+
+  // 応募した地点までの距離。人数と一緒に出すと、行くべきかの判断がつく
+  const distances = heading
+    .map((a) => a.claimDistanceM)
+    .filter((d): d is number => typeof d === 'number');
+
   return {
     ...bounty,
     requesterHandle: requester?.handle ?? '不明',
     requesterEmoji: requester?.emoji ?? '❔',
-    headingCount: apps.filter((a) => a.status === 'heading').length,
+    headingCount: heading.length,
+    nearestHeadingM: distances.length ? Math.round(Math.min(...distances)) : null,
     reportedCount: apps.filter((a) => a.status === 'reported').length,
+    questions,
+    openQuestionCount: questions.filter((q) => q.answer === null).length,
     myApplication:
       apps.find((a) => a.applicantId === viewerId && a.status !== 'lapsed') ??
       apps.find((a) => a.applicantId === viewerId) ??
@@ -295,11 +405,12 @@ export const localRepository: InfoRepository = {
     return read((db) => db.users.find((u) => u.id === userId) ?? null);
   },
 
-  getUserProfile(userId, now) {
+  getUserProfile(userId, now, viewerId) {
     return read<UserProfileView | null>((db) => {
       const user = db.users.find((u) => u.id === userId);
       if (!user) return null;
       const pins = db.pins.filter((p) => p.sellerId === userId);
+      const viewer = viewerId ?? userId;
       return {
         id: user.id,
         handle: user.handle,
@@ -307,17 +418,45 @@ export const localRepository: InfoRepository = {
         score: sellerScore(user.hitCount, user.missCount),
         hitCount: user.hitCount,
         missCount: user.missCount,
+        goneCount: user.goneCount,
         restrictedUntil: user.restrictedUntil,
         activePins: pins
           .filter((p) => isOnMap(p, now))
-          .map((p) => toPublic(db, p, userId))
-          .sort((a, b) => a.expiresAt - b.expiresAt),
+          .map((p) => toPublic(db, p, viewer))
+          .sort(compareDeadline),
         listingCount: pins.length,
         soldCount: pins.reduce((acc, p) => acc + p.slotTaken, 0),
         acceptedReportCount: db.applications.filter(
           (a) => a.applicantId === userId && a.status === 'accepted'
         ).length,
+        followerCount: db.follows.filter((f) => f.followeeId === userId).length,
+        followingCount: db.follows.filter((f) => f.followerId === userId).length,
+        followedByMe: db.follows.some((f) => f.followerId === viewer && f.followeeId === userId),
       };
+    });
+  },
+
+  followUser(viewerId, targetId) {
+    return write((db) => {
+      if (viewerId === targetId) return;
+      if (db.follows.some((f) => f.followerId === viewerId && f.followeeId === targetId)) return;
+      db.follows.push({ followerId: viewerId, followeeId: targetId });
+    });
+  },
+
+  unfollowUser(viewerId, targetId) {
+    return write((db) => {
+      db.follows = db.follows.filter(
+        (f) => !(f.followerId === viewerId && f.followeeId === targetId)
+      );
+    });
+  },
+
+  togglePinLike(userId, pinId) {
+    return write((db) => {
+      const i = db.pinLikes.findIndex((like) => like.userId === userId && like.pinId === pinId);
+      if (i >= 0) db.pinLikes.splice(i, 1);
+      else db.pinLikes.push({ userId, pinId });
     });
   },
 
@@ -326,7 +465,9 @@ export const localRepository: InfoRepository = {
       const settled = runTick(db, now);
       // 開いたまま放置しても切れ目なく続くように、腐ったサンプルを補充する
       const recycled = recycleSamples(db, now);
-      return settled || recycled;
+      // 期限切れから時間がたった写真を実際に捨てる
+      const expired = expirePhotos(db, now);
+      return settled || recycled || expired;
     });
   },
 
@@ -336,7 +477,7 @@ export const localRepository: InfoRepository = {
         .filter((p) => isOnMap(p, now))
         .filter((p) => (bounds ? boundsContain(bounds, { lat: p.lat, lng: p.lng }) : true))
         .map((p) => toPublic(db, p, viewerId))
-        .sort((a, b) => a.expiresAt - b.expiresAt)
+        .sort(compareDeadline)
     );
   },
 
@@ -361,6 +502,7 @@ export const localRepository: InfoRepository = {
             createdAt: pin.createdAt,
             escrow: 'released',
             verdict: null,
+            missReason: null,
             verdictAt: null,
           },
           viewerId
@@ -370,7 +512,9 @@ export const localRepository: InfoRepository = {
     });
   },
 
-  createPin(input, now) {
+  async createPin(input, now) {
+    // 本体の保存に混ぜず、先にファイルへ逃がしてパスだけ持たせる
+    const photoUri = await keepPhoto(input.photoUri);
     return write<CreatePinResult>((db) => {
       const user = db.users.find((u) => u.id === input.sellerId);
       if (!user) return { ok: false, reason: 'invalid' };
@@ -378,10 +522,19 @@ export const localRepository: InfoRepository = {
       if (!isInsideArea({ lat: input.lat, lng: input.lng })) {
         return { ok: false, reason: 'outside_area' };
       }
-      if (!input.headline.trim() || !input.payloadText.trim() || !input.photoUri) {
+      if (
+        !input.headline.trim() ||
+        input.headline.trim().length > 40 ||
+        !input.payloadText.trim() ||
+        input.payloadText.trim().length > 2000 ||
+        !photoUri
+      ) {
         return { ok: false, reason: 'invalid' };
       }
       if (input.price < MIN_PRICE || input.price > MAX_PRICE) {
+        return { ok: false, reason: 'invalid' };
+      }
+      if (!isAllowedPinTtl(input.ttlMinutes)) {
         return { ok: false, reason: 'invalid' };
       }
       const pin: Pin = {
@@ -395,12 +548,13 @@ export const localRepository: InfoRepository = {
         stockState: input.stockState,
         payloadText: input.payloadText.trim(),
         quantityNote: input.quantityNote?.trim() || null,
-        photoUri: input.photoUri,
+        photoUri,
+        proof: input.proof,
         price: input.price,
         slotTotal: input.slotTotal,
         slotTaken: 0,
         createdAt: now,
-        expiresAt: now + input.ttlMinutes * MIN,
+        expiresAt: input.ttlMinutes === null ? null : now + input.ttlMinutes * MIN,
         status: 'active',
       };
       db.pins.push(pin);
@@ -482,6 +636,7 @@ export const localRepository: InfoRepository = {
         createdAt: now,
         escrow: 'held',
         verdict: null,
+        missReason: null,
         verdictAt: null,
       };
       db.purchases.push(purchase);
@@ -503,14 +658,15 @@ export const localRepository: InfoRepository = {
     });
   },
 
-  submitVerdict(purchaseId, verdict, now) {
+  submitVerdict(purchaseId, buyerId, verdict, reason, now) {
     return write((db) => {
       const purchase = db.purchases.find((p) => p.id === purchaseId);
-      if (!purchase || purchase.escrow !== 'held') return;
+      if (!purchase || purchase.buyerId !== buyerId || purchase.escrow !== 'held') return;
       const pin = db.pins.find((p) => p.id === purchase.pinId);
       if (!pin) return;
 
       purchase.verdict = verdict;
+      purchase.missReason = verdict === 'miss' ? reason : null;
       purchase.verdictAt = now;
       const seller = db.users.find((u) => u.id === pin.sellerId);
 
@@ -530,7 +686,24 @@ export const localRepository: InfoRepository = {
       } else {
         purchase.escrow = 'refunded';
         refundPurchase(db.wallet, purchase.buyerId, purchase.price, purchase.id, pin.headline, now);
-        if (seller) seller.missCount += 1;
+        // 着いたら売り切れていたのは、腐る情報を扱う以上ふつうに起きる。
+        // 返金はするが、嘘をついた出品者と同じ扱いにはしない
+        if (seller) {
+          if (reason && isSellerFault(reason)) seller.missCount += 1;
+          else seller.goneCount += 1;
+        }
+        // 着いたら無かったなら掲載ごと止める。他の未確定購入も返す
+        if (reason === 'gone' && pin.status === 'active') {
+          pin.status = 'voided';
+          for (const other of db.purchases) {
+            if (other.id === purchase.id || other.pinId !== pin.id || other.escrow !== 'held') {
+              continue;
+            }
+            other.escrow = 'refunded';
+            other.verdictAt = now;
+            refundPurchase(db.wallet, other.buyerId, other.price, other.id, pin.headline, now);
+          }
+        }
       }
 
       if (seller && shouldRestrict(seller.hitCount, seller.missCount)) {
@@ -567,12 +740,17 @@ export const localRepository: InfoRepository = {
     });
   },
 
-  listApplications(bountyId) {
-    return read((db) =>
-      db.applications
+  listApplications(bountyId, viewerId) {
+    return read((db) => {
+      const bounty = db.bounties.find((b) => b.id === bountyId);
+      if (!bounty) return [];
+      const apps = db.applications
         .filter((a) => a.bountyId === bountyId)
-        .sort((a, b) => a.createdAt - b.createdAt)
-    );
+        .sort((a, b) => a.createdAt - b.createdAt);
+      // 依頼者は全員分、応募者は自分の分だけ。第三者が報告文と写真を抜けないようにする
+      if (bounty.requesterId === viewerId) return apps;
+      return apps.filter((a) => a.applicantId === viewerId);
+    });
   },
 
   createBounty(input, now) {
@@ -596,6 +774,9 @@ export const localRepository: InfoRepository = {
         radiusM: input.radiusM,
         areaLabel: input.areaLabel.trim() || '指定エリア',
         targetText: input.targetText.trim(),
+        placeHint: input.placeHint?.trim() || null,
+        photoWanted: input.photoWanted?.trim() || null,
+        payIfAbsent: input.payIfAbsent,
         reward: input.reward,
         acceptCount: input.acceptCount,
         acceptedCount: 0,
@@ -609,20 +790,24 @@ export const localRepository: InfoRepository = {
     });
   },
 
-  applyToBounty(bountyId, userId, now) {
+  applyToBounty(bountyId, userId, claimDistanceM, now) {
     return write<ApplyResult>((db) => {
       runTick(db, now);
       const bounty = db.bounties.find((b) => b.id === bountyId);
       if (!bounty) return { ok: false, reason: 'not_found' };
       if (bounty.requesterId === userId) return { ok: false, reason: 'own_bounty' };
       if (!isBountyOpen(bounty, now)) return { ok: false, reason: 'closed' };
-      const active = db.applications.find(
-        (a) =>
-          a.bountyId === bountyId &&
-          a.applicantId === userId &&
-          (a.status === 'heading' || a.status === 'reported' || a.status === 'accepted')
-      );
-      if (active) return { ok: false, reason: 'duplicate' };
+
+      const isLive = (a: BountyApplication) =>
+        a.status === 'heading' || a.status === 'reported' || a.status === 'accepted';
+
+      if (db.applications.some((a) => a.bountyId === bountyId && a.applicantId === userId && isLive(a))) {
+        return { ok: false, reason: 'duplicate' };
+      }
+      // 距離では止めない。片っ端に押さえる使い方は、同時件数と自動失効で抑える
+      if (db.applications.filter((a) => a.applicantId === userId && isLive(a)).length >= MAX_ACTIVE_CLAIMS) {
+        return { ok: false, reason: 'too_many' };
+      }
 
       db.applications.push({
         id: newId('ap'),
@@ -633,37 +818,41 @@ export const localRepository: InfoRepository = {
         reportedAt: null,
         reportText: null,
         photoUri: null,
+        proof: null,
+        claimDistanceM,
         decidedAt: null,
       });
       return { ok: true };
     });
   },
 
-  reportToBounty(applicationId, report, now) {
+  async reportToBounty(applicationId, applicantId, report, now) {
+    const photoUri = await keepPhoto(report.photoUri);
     return write<ReportResult>((db) => {
       runTick(db, now);
       const app = db.applications.find((a) => a.id === applicationId);
-      if (!app) return { ok: false, reason: 'not_found' };
+      if (!app || app.applicantId !== applicantId) return { ok: false, reason: 'not_found' };
       if (app.status !== 'heading') return { ok: false, reason: 'not_heading' };
       const bounty = db.bounties.find((b) => b.id === app.bountyId);
       if (!bounty) return { ok: false, reason: 'not_found' };
       if (!isBountyOpen(bounty, now)) return { ok: false, reason: 'closed' };
-      if (!report.photoUri) return { ok: false, reason: 'photo_required' };
+      if (!photoUri) return { ok: false, reason: 'photo_required' };
 
       app.status = 'reported';
       app.reportedAt = now;
       app.reportText = report.text.trim();
-      app.photoUri = report.photoUri;
+      app.photoUri = photoUri;
+      app.proof = report.proof;
       return { ok: true, accepted: false };
     });
   },
 
-  decideApplication(applicationId, accept, now) {
+  decideApplication(applicationId, requesterId, accept, now) {
     return write((db) => {
       const app = db.applications.find((a) => a.id === applicationId);
       if (!app || app.status !== 'reported') return;
       const bounty = db.bounties.find((b) => b.id === app.bountyId);
-      if (!bounty || bounty.status !== 'open') return;
+      if (!bounty || bounty.requesterId !== requesterId || bounty.status !== 'open') return;
       if (accept) {
         acceptApplication(db, app, bounty, now);
       } else {
@@ -678,6 +867,50 @@ export const localRepository: InfoRepository = {
       const bounty = db.bounties.find((b) => b.id === bountyId);
       if (!bounty || bounty.requesterId !== requesterId || bounty.status !== 'open') return;
       closeBounty(db, bounty, 'cancelled', now);
+    });
+  },
+
+  askQuestion(bountyId, body, userId, now) {
+    return write((db) => {
+      const bounty = db.bounties.find((b) => b.id === bountyId);
+      if (!bounty || bounty.requesterId === userId) return;
+      if (!isBountyOpen(bounty, now)) return;
+      const text = body.trim();
+      if (!text) return;
+      // 答え待ちを何本も積まれると依頼者が捌けなくなる。1人1本まで
+      if (
+        db.questions.some(
+          (q) => q.bountyId === bountyId && q.askedBy === userId && q.answer === null
+        )
+      ) {
+        return;
+      }
+
+      const asker = db.users.find((u) => u.id === userId);
+      db.questions.push({
+        id: newId('q'),
+        bountyId,
+        askedBy: userId,
+        askedByHandle: asker?.handle ?? 'ゲスト',
+        askedByEmoji: asker?.emoji ?? '🙂',
+        askedAt: now,
+        body: text,
+        answer: null,
+        answeredAt: null,
+      });
+    });
+  },
+
+  answerQuestion(questionId, requesterId, answer, now) {
+    return write((db) => {
+      const question = db.questions.find((q) => q.id === questionId);
+      if (!question) return;
+      const bounty = db.bounties.find((b) => b.id === question.bountyId);
+      if (!bounty || bounty.requesterId !== requesterId) return;
+      const text = answer.trim();
+      if (!text) return;
+      question.answer = text;
+      question.answeredAt = now;
     });
   },
 
@@ -798,7 +1031,19 @@ export const localRepository: InfoRepository = {
   },
 
   createReport(reporterId, targetKind, targetId, reason, now) {
-    return write((db) => {
+    return write<ReportResultKind>((db) => {
+      // 同じ人が何度も押しても1件。押した数で閾値を超えられては意味がない
+      if (
+        db.reports.some(
+          (r) =>
+            r.targetKind === targetKind &&
+            r.targetId === targetId &&
+            r.reporterId === reporterId
+        )
+      ) {
+        return 'already';
+      }
+
       const report: Report = {
         id: newId('rp'),
         reporterId,
@@ -808,11 +1053,52 @@ export const localRepository: InfoRepository = {
         createdAt: now,
       };
       db.reports.push(report);
+
+      const reporters = new Set(
+        db.reports
+          .filter((r) => r.targetKind === targetKind && r.targetId === targetId)
+          .map((r) => r.reporterId)
+      );
+      if (reporters.size < REPORTS_TO_VOID) return 'recorded';
+
+      // 人が見て判断するまで待つと、期限が来て対応そのものが間に合わない。
+      // 別々の人から一定数集まった時点で止め、預かっている代金は買い手へ返す
+      if (targetKind === 'pin') {
+        const pin = db.pins.find((p) => p.id === targetId);
+        if (!pin || pin.status !== 'active') return 'recorded';
+        pin.status = 'voided';
+        for (const purchase of db.purchases) {
+          if (purchase.pinId !== targetId || purchase.escrow !== 'held') continue;
+          purchase.escrow = 'refunded';
+          purchase.verdictAt = now;
+          refundPurchase(db.wallet, purchase.buyerId, purchase.price, purchase.id, pin.headline, now);
+        }
+      } else {
+        const bounty = db.bounties.find((b) => b.id === targetId);
+        if (!bounty || bounty.status !== 'open') return 'recorded';
+        closeBounty(db, bounty, 'cancelled', now);
+      }
+      return 'voided';
+    });
+  },
+
+  storageUsage() {
+    return serialize(async () => {
+      const db = await loadDb();
+      const raw = await AsyncStorage.getItem(STORAGE_KEY);
+      return {
+        recordBytes: raw?.length ?? 0,
+        photoBytes: await photoBytes(),
+        pins: db.pins.length,
+        bounties: db.bounties.length,
+        ledgerEntries: db.wallet.length,
+      };
     });
   },
 
   resetAll(now) {
     return serialize(async () => {
+      await sweepPhotos(new Set());
       cache = buildSeed(now);
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(cache));
     });

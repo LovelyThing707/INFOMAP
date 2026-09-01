@@ -41,6 +41,7 @@ export default function MapCanvas({
   onMarkerPress,
   onBoundsChange,
   onMapPress,
+  interactive = true,
   style,
 }: MapCanvasProps) {
   const mapRef = useRef<MapView | null>(null);
@@ -89,6 +90,10 @@ export default function MapCanvas({
         style={StyleSheet.absoluteFill}
         showsUserLocation={!userLocation}
         showsMyLocationButton={false}
+        scrollEnabled={interactive}
+        zoomEnabled={interactive}
+        pitchEnabled={interactive}
+        rotateEnabled={interactive}
         minZoomLevel={AREA.minZoom}
         maxZoomLevel={AREA.maxZoom}
         initialRegion={{

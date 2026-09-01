@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-import type { LatLng, StockState } from '@/domain/types';
+import type { LatLng, StockState, StoredProof } from '@/domain/types';
 
 export interface SellDraft {
   lat?: number;
@@ -11,6 +11,11 @@ export interface SellDraft {
   quantityNote?: string;
   payloadText?: string;
   photoUri?: string;
+  /**
+   * 報告のときに撮った記録。出品に引き継ぐと再撮影が要らない。
+   * 依頼の中心からの距離なので、同じ地点にピンを立てる限りそのまま使える。
+   */
+  proof?: StoredProof | null;
 }
 
 interface DraftState {
@@ -34,7 +39,8 @@ export function draftFromReport(
   areaLabel: string,
   targetText: string,
   reportText: string,
-  photoUri: string | null
+  photoUri: string | null,
+  proof: StoredProof | null
 ): SellDraft {
   return {
     lat: point.lat,
@@ -43,5 +49,6 @@ export function draftFromReport(
     headline: targetText.slice(0, 40),
     payloadText: reportText,
     photoUri: photoUri ?? undefined,
+    proof,
   };
 }

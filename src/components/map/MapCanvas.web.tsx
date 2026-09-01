@@ -51,8 +51,10 @@ const TONE_LAYER: Record<MapMarkerModel['tone'], number> = {
 };
 
 const userIcon = L.divIcon({
-  className: 'im-pin-icon',
+  className: 'im-dot-icon',
   html: '<div class="im-dot-anchor"><div class="im-dot"></div></div>',
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
 });
 
 const draftIcon = L.divIcon({
@@ -64,6 +66,21 @@ const draftIcon = L.divIcon({
  * OpenStreetMap 系のタイルはクレジットの表示が利用条件なので、必ず見える位置に置く。
  * 地図タブは下をシートが覆うので、呼び出し側から inset をもらって持ち上げる。
  */
+function isFinitePoint(point: LatLng | undefined): point is LatLng {
+  return (
+    !!point &&
+    Number.isFinite(point.lat) &&
+    Number.isFinite(point.lng) &&
+    Math.abs(point.lat) <= 90 &&
+    Math.abs(point.lng) <= 180
+  );
+}
+
+function mapHasSize(map: L.Map): boolean {
+  const size = map.getSize();
+  return size.x >= 2 && size.y >= 2;
+}
+
 function Attribution({ inset }: { inset: number }) {
   return (
     <Pressable
@@ -82,14 +99,14 @@ function MapEvents({
   onMapPress?: (point: LatLng) => void;
 }) {
   const emit = (map: L.Map) => {
-    if (!onBoundsChange) return;
+    if (!onBoundsChange || !mapHasSize(map)) return;
     const b = map.getBounds();
-    onBoundsChange({
-      north: b.getNorth(),
-      south: b.getSouth(),
-      east: b.getEast(),
-      west: b.getWest(),
-    });
+    const north = b.getNorth();
+    const south = b.getSouth();
+    const east = b.getEast();
+    const west = b.getWest();
+    if (![north, south, east, west].every(Number.isFinite)) return;
+    onBoundsChange({ north, south, east, west });
   };
 
   const map = useMapEvents({
@@ -126,14 +143,32 @@ function CameraController({
 
   useEffect(() => {
     if (!camera || camera.nonce === lastCamera.current) return;
-    lastCamera.current = camera.nonce;
-    map.flyTo([camera.center.lat, camera.center.lng], camera.zoom ?? map.getZoom(), {
-      duration: 0.55,
+    if (!isFinitePoint(camera.center)) return;
+
+    const zoom = camera.zoom ?? map.getZoom();
+    if (!Number.isFinite(zoom)) return;
+
+    const move = () => {
+      if (!mapHasSize(map)) return false;
+      map.invalidateSize();
+      // タブ切替や iframe 直後は箱が 0 のまま flyTo すると Leaflet が NaN を投げる
+      map.setView([camera.center.lat, camera.center.lng], zoom, { animate: false });
+      lastCamera.current = camera.nonce;
+      return true;
+    };
+
+    if (move()) return;
+
+    const observer = new ResizeObserver(() => {
+      if (move()) observer.disconnect();
     });
+    observer.observe(map.getContainer());
+    return () => observer.disconnect();
   }, [camera, map]);
 
   useEffect(() => {
     if (!zoomNudge || zoomNudge.nonce === lastZoom.current) return;
+    if (!mapHasSize(map)) return;
     lastZoom.current = zoomNudge.nonce;
     if (zoomNudge.delta > 0) map.zoomIn();
     else map.zoomOut();
@@ -155,6 +190,7 @@ export default function MapCanvas({
   onMarkerPress,
   onBoundsChange,
   onMapPress,
+  interactive = true,
   style,
 }: MapCanvasProps) {
   const icons = useMemo(() => markers.map((m) => ({ marker: m, icon: pinIcon(m) })), [markers]);
@@ -166,6 +202,20 @@ export default function MapCanvas({
         zoom={initialZoom}
         minZoom={AREA.minZoom}
         maxZoom={AREA.maxZoom}
+        /**
+         * 横に流し続けると地球を1周して戻ってくる。タイルはもともと繰り返し描かれるが、
+         * ピンは2周目の座標には置かれないので、そのままだと回した先が空になる。
+         * worldCopyJump は1周ぶん進んだ時点で表示を元の世界へ差し替え、
+         * 見た目を保ったままピンが消えないようにする。
+         */
+        worldCopyJump
+        dragging={interactive}
+        scrollWheelZoom={interactive}
+        touchZoom={interactive}
+        doubleClickZoom={interactive}
+        boxZoom={interactive}
+        keyboard={interactive}
+        className={interactive ? undefined : 'im-map--static'}
         zoomControl={false}
         attributionControl={false}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>

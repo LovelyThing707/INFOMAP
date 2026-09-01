@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Colors, Fonts, MAX_CONTENT_WIDTH, Spacing } from '@/constants/theme';
+import { Fonts, MAX_CONTENT_WIDTH, Spacing } from '@/constants/theme';
+import { useColors } from '@/hooks/use-colors';
 
 export function Screen({
   title,
@@ -17,18 +18,22 @@ export function Screen({
   children: ReactNode;
   scroll?: boolean;
 }) {
+  const colors = useColors();
+
   const header = (
     <View style={styles.header}>
       <View style={styles.headerText}>
-        <Text style={styles.title}>{title}</Text>
-        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+        {subtitle ? (
+          <Text style={[styles.subtitle, { color: colors.textSub }]}>{subtitle}</Text>
+        ) : null}
       </View>
       {right}
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: colors.bg }]} edges={['top']}>
       {scroll ? (
         <ScrollView
           contentContainerStyle={styles.scrollContent}
@@ -50,7 +55,7 @@ export function Screen({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.bg },
+  safe: { flex: 1 },
   scrollContent: { paddingBottom: 48 },
   inner: {
     width: '100%',
@@ -67,6 +72,6 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.md,
   },
   headerText: { flex: 1, gap: 2 },
-  title: { fontSize: 24, fontWeight: '800', color: Colors.text, fontFamily: Fonts.sans },
-  subtitle: { fontSize: 13, color: Colors.textSub, lineHeight: 19, fontFamily: Fonts.sans },
+  title: { fontSize: 24, fontWeight: '800', fontFamily: Fonts.sans },
+  subtitle: { fontSize: 13, lineHeight: 19, fontFamily: Fonts.sans },
 });
