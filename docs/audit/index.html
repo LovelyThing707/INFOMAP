@@ -1,0 +1,1140 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="INFOMAP / Tipster のコード実測診断。本番で起動しない3機能、クライアント構想7ステップとの照合、決済・法規制、開発基盤の耐性を、ローカルでの再現実測つきで報告する。">
+<meta name="robots" content="noindex, nofollow">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Tipster 実測診断">
+<meta property="og:description" content="INFOMAP / Tipster のコード実測診断。本番で起動しない3機能、クライアント構想7ステップとの照合、決済・法規制、開発基盤の耐性を、ローカルでの再現実測つきで報告する。">
+<style>
+  :root { color-scheme: light dark; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Tipster 実測診断</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  :root {
+    --ground: #EDF0F4;
+    --surface: #FFFFFF;
+    --surface-sunk: #F5F7F9;
+    --ink: #16202B;
+    --ink-soft: #55677A;
+    --ink-faint: #7C8B99;
+    --rule: #D4DBE3;
+    --rule-soft: #E4E9EE;
+    --accent: #1A6FC4;
+    --accent-quiet: #E6F1FC;
+    --crit: #A81E17;
+    --crit-quiet: #FBE9E7;
+    --warn: #8A5200;
+    --warn-quiet: #FAF0DF;
+    --ok: #17694A;
+    --ok-quiet: #E4F2EC;
+    --shadow: 0 1px 2px rgba(22, 32, 43, .06), 0 8px 24px -16px rgba(22, 32, 43, .28);
+
+    --f-display: "Zen Old Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
+    --f-body: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+    --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0D141B;
+      --surface: #151F29;
+      --surface-sunk: #111A23;
+      --ink: #E3EAF1;
+      --ink-soft: #9BAAB9;
+      --ink-faint: #758594;
+      --rule: #27333F;
+      --rule-soft: #1E2934;
+      --accent: #6BB0F2;
+      --accent-quiet: #14283A;
+      --crit: #F0897A;
+      --crit-quiet: #341A18;
+      --warn: #DFA854;
+      --warn-quiet: #2E2313;
+      --ok: #6DC8A0;
+      --ok-quiet: #122A22;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0D141B;
+    --surface: #151F29;
+    --surface-sunk: #111A23;
+    --ink: #E3EAF1;
+    --ink-soft: #9BAAB9;
+    --ink-faint: #758594;
+    --rule: #27333F;
+    --rule-soft: #1E2934;
+    --accent: #6BB0F2;
+    --accent-quiet: #14283A;
+    --crit: #F0897A;
+    --crit-quiet: #341A18;
+    --warn: #DFA854;
+    --warn-quiet: #2E2313;
+    --ok: #6DC8A0;
+    --ok-quiet: #122A22;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 15px;
+    line-height: 1.85;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px 96px;
+  }
+
+  @media (min-width: 1080px) {
+    .page { grid-template-columns: 208px minmax(0, 1fr); gap: 48px; padding-right: 40px; }
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead {
+    grid-column: 1 / -1;
+    padding: 56px 0 32px;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .kicker {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 14px;
+  }
+
+  h1 {
+    font-family: var(--f-display);
+    font-weight: 700;
+    font-size: clamp(30px, 5.2vw, 46px);
+    line-height: 1.25;
+    letter-spacing: .01em;
+    margin: 0 0 18px;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    max-width: 62ch;
+    font-size: 16px;
+    color: var(--ink-soft);
+    margin: 0 0 26px;
+  }
+
+  .meta-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    color: var(--ink-faint);
+  }
+  .meta-strip b { color: var(--ink-soft); font-weight: 500; }
+
+  /* ---------- toc rail ---------- */
+
+  .rail { display: none; }
+
+  @media (min-width: 1080px) {
+    .rail {
+      display: block;
+      grid-column: 1;
+      align-self: start;
+      position: sticky;
+      top: 24px;
+      padding-top: 44px;
+    }
+    .rail ol {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      counter-reset: toc;
+    }
+    .rail a {
+      display: block;
+      font-size: 12.5px;
+      line-height: 1.45;
+      color: var(--ink-faint);
+      text-decoration: none;
+      border-left: 2px solid var(--rule);
+      padding: 2px 0 2px 12px;
+      transition: color .15s, border-color .15s;
+    }
+    .rail a::before {
+      counter-increment: toc;
+      content: counter(toc, decimal-leading-zero) "  ";
+      font-family: var(--f-mono);
+      font-size: 10px;
+      color: var(--ink-faint);
+    }
+    .rail a:hover, .rail a:focus-visible { color: var(--accent); border-left-color: var(--accent); }
+  }
+
+  main { grid-column: 1 / -1; min-width: 0; }
+  @media (min-width: 1080px) { main { grid-column: 2; } }
+
+  /* ---------- verdict ---------- */
+
+  .verdict {
+    margin: 36px 0 12px;
+    padding: 26px 28px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--crit);
+    border-radius: 2px;
+    box-shadow: var(--shadow);
+  }
+  .verdict p {
+    margin: 0;
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: clamp(17px, 2.4vw, 21px);
+    line-height: 1.7;
+    text-wrap: pretty;
+  }
+  .verdict p + p { margin-top: 14px; font-family: var(--f-body); font-weight: 400; font-size: 15px; color: var(--ink-soft); }
+
+  /* ---------- headline stats ---------- */
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 28px 0 8px;
+  }
+  .stat { background: var(--surface); padding: 16px 18px; }
+  .stat dt {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 6px;
+  }
+  .stat dd {
+    margin: 0;
+    font-family: var(--f-display);
+    font-weight: 700;
+    font-size: 25px;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat dd small { font-family: var(--f-body); font-size: 12px; font-weight: 400; color: var(--ink-soft); display: block; margin-top: 3px; line-height: 1.5; }
+  .stat.is-crit dd { color: var(--crit); }
+  .stat.is-ok dd { color: var(--ok); }
+
+  /* ---------- sections ---------- */
+
+  section { margin-top: 60px; scroll-margin-top: 20px; }
+
+  h2 {
+    font-family: var(--f-display);
+    font-weight: 700;
+    font-size: clamp(21px, 3vw, 26px);
+    line-height: 1.4;
+    margin: 0 0 6px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--ink);
+    text-wrap: balance;
+  }
+  .sec-note {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: .06em;
+    color: var(--ink-faint);
+    margin: 10px 0 22px;
+  }
+
+  h3 {
+    font-family: var(--f-body);
+    font-weight: 700;
+    font-size: 15.5px;
+    margin: 34px 0 10px;
+    letter-spacing: .01em;
+  }
+
+  p { margin: 0 0 16px; max-width: 68ch; text-wrap: pretty; }
+
+  ul, ol { max-width: 68ch; padding-left: 1.3em; margin: 0 0 16px; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--ink-faint); }
+
+  code {
+    font-family: var(--f-mono);
+    font-size: .855em;
+    background: var(--surface-sunk);
+    border: 1px solid var(--rule-soft);
+    border-radius: 2px;
+    padding: .1em .34em;
+    word-break: break-word;
+  }
+
+  strong { font-weight: 700; }
+  em { font-style: normal; background: linear-gradient(transparent 62%, var(--accent-quiet) 62%); padding: 0 1px; }
+
+  /* ---------- finding blocks ---------- */
+
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--crit);
+    border-radius: 2px;
+    padding: 20px 22px;
+    margin: 0 0 18px;
+    box-shadow: var(--shadow);
+  }
+  .finding.sev-high { border-left-color: var(--warn); }
+  .finding.sev-note { border-left-color: var(--accent); }
+
+  .f-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+
+  .chip {
+    font-family: var(--f-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .chip-crit { background: var(--crit-quiet); color: var(--crit); }
+  .chip-high { background: var(--warn-quiet); color: var(--warn); }
+  .chip-ok   { background: var(--ok-quiet); color: var(--ok); }
+  .chip-info { background: var(--accent-quiet); color: var(--accent); }
+  .chip-flat { background: var(--surface-sunk); color: var(--ink-faint); border: 1px solid var(--rule-soft); }
+
+  .f-title {
+    font-family: var(--f-body);
+    font-weight: 700;
+    font-size: 16px;
+    line-height: 1.55;
+    margin: 0 0 10px;
+    max-width: 62ch;
+  }
+  .finding p { font-size: 14.5px; margin-bottom: 12px; }
+  .finding p:last-of-type { margin-bottom: 0; }
+
+  .cite {
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    line-height: 1.75;
+    color: var(--ink-faint);
+    background: var(--surface-sunk);
+    border-top: 1px solid var(--rule-soft);
+    margin: 14px -22px -20px;
+    padding: 11px 22px 13px;
+    overflow-x: auto;
+  }
+  .cite b { color: var(--ink-soft); font-weight: 500; }
+
+  /* ---------- tables ---------- */
+
+  .tw { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--rule); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 520px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; line-height: 1.65; }
+  thead th {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: var(--surface-sunk);
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.cmd { font-family: var(--f-mono); font-size: 12px; white-space: nowrap; }
+  .r-ok { color: var(--ok); font-weight: 700; }
+  .r-no { color: var(--crit); font-weight: 700; }
+  .r-mid { color: var(--warn); font-weight: 700; }
+
+  /* ---------- step sequence ---------- */
+
+  .steps { list-style: none; padding: 0; margin: 0; max-width: none; counter-reset: step; }
+  .step {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 16px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--rule);
+    margin: 0;
+  }
+  .step:first-child { border-top: 1px solid var(--rule); }
+  .step-n {
+    counter-increment: step;
+    font-family: var(--f-mono);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink-faint);
+    padding-top: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .step-n::before { content: counter(step, decimal-leading-zero); }
+  .step-b { min-width: 0; }
+  .step-t { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .step-t b { font-size: 15px; }
+  .step-b p { margin: 0; font-size: 14px; color: var(--ink-soft); max-width: 64ch; }
+
+  /* ---------- plan ---------- */
+
+  .plan { display: flex; flex-direction: column; gap: 14px; margin-bottom: 22px; }
+  .task {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 15px 18px;
+  }
+  .task-k {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    padding: 3px 7px;
+    border-radius: 2px;
+    white-space: nowrap;
+    margin-top: 2px;
+  }
+  .k-p0 { background: var(--crit-quiet); color: var(--crit); }
+  .k-p1 { background: var(--warn-quiet); color: var(--warn); }
+  .k-p2 { background: var(--accent-quiet); color: var(--accent); }
+  .task b { display: block; font-size: 14.5px; margin-bottom: 3px; }
+  .task span { font-size: 13.5px; color: var(--ink-soft); line-height: 1.7; display: block; }
+
+  /* ---------- callout ---------- */
+
+  .note {
+    background: var(--surface-sunk);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 16px 20px;
+    margin: 0 0 20px;
+    font-size: 14px;
+    color: var(--ink-soft);
+    max-width: 68ch;
+  }
+  .note b { color: var(--ink); }
+  .note p:last-child { margin-bottom: 0; }
+
+  footer {
+    grid-column: 1 / -1;
+    margin-top: 72px;
+    padding-top: 22px;
+    border-top: 2px solid var(--ink);
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    line-height: 1.9;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <p class="kicker">Code audit · reproduced locally</p>
+    <h1>実測して分かった Tipster の現在地</h1>
+    <p class="standfirst">
+      クライアント構想（品切れの商品を探して有料で情報を募る）に対し、リポジトリ <code>INFOMAP</code> を全ファイル精読し、
+      主要な主張はローカルの Postgres に実際に当てて検証した。設計思想と DB 権限は水準が高い。
+      一方で <em>本番バックエンドでは中核の3機能が起動しない</em>。
+    </p>
+    <div class="meta-strip">
+      <span><b>対象</b> INFOMAP / Tipster @ 2b082d7</span>
+      <span><b>規模</b> src 14,809 行 · migration 9 本</span>
+      <span><b>手法</b> 23エージェント精読 + PGlite 実測</span>
+      <span><b>日付</b> 2026-09-02</span>
+    </div>
+  </header>
+
+  <nav class="rail" aria-label="目次">
+    <ol>
+      <li><a href="#verdict">結論</a></li>
+      <li><a href="#measured">実測したこと</a></li>
+      <li><a href="#broken">本番で起動しない3点</a></li>
+      <li><a href="#seven">構想7ステップの照合</a></li>
+      <li><a href="#trust">信頼システム</a></li>
+      <li><a href="#arb">アービトラージ構想</a></li>
+      <li><a href="#money">決済と法規制</a></li>
+      <li><a href="#unit">ユニットエコノミクス</a></li>
+      <li><a href="#infra">開発基盤の耐性</a></li>
+      <li><a href="#store">ストア審査</a></li>
+      <li><a href="#plan">行動計画</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- 1 -->
+    <section id="verdict">
+      <div class="verdict">
+        <p>
+          このコードベースは「よく設計された動くモック」であって、まだ「動く事業」ではない。
+          ローカル実装（AsyncStorage）では構想どおり一周するが、Supabase を繋いだ本番経路では
+          判定・返金・売上表示・入金がいずれも成立しない。
+        </p>
+        <p>
+          ただし欠けているのは設計力ではなく、検証と運用の層である。DB 権限の設計は実際に外から叩いて 36/36 で守られており、
+          これは通常この段階のスタートアップには無い資産。結論は「作り直し」ではなく「本番経路の修理と計測基盤の追加に2〜3週間」。
+        </p>
+      </div>
+
+      <dl class="stats">
+        <div class="stat is-ok">
+          <dt>権限の実測</dt>
+          <dd>36<small>/ 36 件すべて期待どおり（自分で再現）</small></dd>
+        </div>
+        <div class="stat is-crit">
+          <dt>本番で起動しない</dt>
+          <dd>3<small>判定・売上表示・入金</small></dd>
+        </div>
+        <div class="stat is-crit">
+          <dt>自動テスト</dt>
+          <dd>0<small>src 14,809 行に対して</small></dd>
+        </div>
+        <div class="stat">
+          <dt>1取引の粗利</dt>
+          <dd>¥10–400<small>価格 ¥50–2,000 × 20%</small></dd>
+        </div>
+        <div class="stat">
+          <dt>コミット</dt>
+          <dd>5<small>単独作者 · 全て main 直</small></dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- 2 -->
+    <section id="measured">
+      <h2>何を実測したか</h2>
+      <p class="sec-note">エージェントの報告を鵜呑みにせず、判断に効く主張は自分で実行して確認した。</p>
+
+      <div class="tw">
+        <table>
+          <thead>
+            <tr><th>実行したこと</th><th>結果</th><th>意味</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="cmd">npm ci --include=dev</td>
+              <td class="r-ok">成功 · 603 packages</td>
+              <td>Expo 57 / RN 0.86 / React 19.2 / TS 6.0 という攻めたバージョン固定は実在し、解決する</td>
+            </tr>
+            <tr>
+              <td class="cmd">node scripts/verify-schema.mjs</td>
+              <td class="r-ok">36 / 36</td>
+              <td>RLS・RPC 権限・private Storage・台帳・通報自動取り下げが実際に守られている</td>
+            </tr>
+            <tr>
+              <td class="cmd">tsc --noEmit</td>
+              <td class="r-mid">2 errors</td>
+              <td>いずれも CSS の side-effect import。生成物 <code>expo-env.d.ts</code> が .gitignore なので、クローン直後は必ず赤</td>
+            </tr>
+            <tr>
+              <td class="cmd">expo lint</td>
+              <td class="r-ok">0 errors / 2 warnings</td>
+              <td>アプリ側は綺麗</td>
+            </tr>
+            <tr>
+              <td class="cmd">npx eslint .</td>
+              <td class="r-no">12 errors</td>
+              <td><code>scripts/*.mjs</code> の <code>Buffer</code> が no-undef。CI を今日入れると赤で始まる</td>
+            </tr>
+            <tr>
+              <td class="cmd">submit_verdict を買い手として呼ぶ</td>
+              <td class="r-no">型エラーで失敗</td>
+              <td>後述。既存の検証スクリプトはこの経路を踏んでいなかった</td>
+            </tr>
+            <tr>
+              <td class="cmd">purchases を本人として SELECT</td>
+              <td class="r-no">permission denied</td>
+              <td>後述</td>
+            </tr>
+            <tr>
+              <td class="cmd">verify:flow / verify:remote</td>
+              <td class="r-mid">実行不可</td>
+              <td>実 Supabase の鍵が要る。CI で回せるのは verify:schema だけ</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <p><b>補足。</b>私の環境は既定で devDependencies を入れない設定だったため、最初の typecheck は誤って10件のエラーを出した。
+        dev 依存を入れ直すと2件になる。上の表は入れ直したあとの数字。</p>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section id="broken">
+      <h2>本番バックエンドで起動しない3点</h2>
+      <p class="sec-note">3件とも、ローカル実装では正常に動く。だから今まで気づかれていない。</p>
+
+      <div class="finding">
+        <div class="f-head">
+          <span class="chip chip-crit">Critical</span>
+          <span class="chip chip-flat">自分で再現</span>
+        </div>
+        <p class="f-title">買い手は「当たり／外れ」を一度も申告できない。返金経路が存在しない</p>
+        <p>
+          <code>submit_verdict</code> の中の
+          <code>escrow = case when p_verdict = 'hit' then 'released' else 'refunded' end</code> は、
+          両分岐が型のないリテラルなので Postgres が式全体を <code>text</code> と解決する。
+          enum 列への代入に text→enum の経路は無く、<em>hit でも miss でも必ず例外で落ちる</em>。
+          最小再現も、全 migration を当てた実スキーマでの再現も一致した。
+        </p>
+        <p>
+          影響が大きいのは、失敗が誰にも見えないこと。クライアントは <code>rpcVoid</code> 経由で呼んでおり、
+          この関数は Supabase のエラーを一切読まない（コメントは「黙って捨てず」と書いてあるが、実装は捨てている）。
+          画面は何事もなかったように振る舞う。
+        </p>
+        <p>
+          連鎖して壊れるものが重い。<code>hit_count</code> / <code>miss_count</code> / <code>gone_count</code> /
+          <code>restricted_until</code> を書き換えるコードは <em>この関数の中にしか存在しない</em>。
+          つまり本番では売り手スコアが永久に <code>null</code>、悪質出品者の出品制限も永久に発火しない。
+          そして <code>run_tick</code> は2時間後に全ての held を無条件で released にするので、
+          <strong>買った情報が嘘でも金は必ず売り手に渡る</strong>。
+        </p>
+        <div class="cite">
+          <b>20260831040000_open_ended_pins.sql:130</b>（init.sql:481 も同型）<br>
+          実測エラー: <code>column "escrow" is of type public.escrow_state but expression is of type text</code><br>
+          <b>src/data/supabaseRepository.ts:138, 826</b> · <b>init.sql:894</b> run_tick の自動確定<br>
+          修正: <code>end)::public.escrow_state</code> を付けるだけ（1行）
+        </div>
+      </div>
+
+      <div class="finding sev-high">
+        <div class="f-head">
+          <span class="chip chip-high">High</span>
+          <span class="chip chip-flat">自分で再現</span>
+        </div>
+        <p class="f-title">出品者の売上一覧が常に ¥0 になる</p>
+        <p>
+          <code>purchases</code> の RLS ポリシーが <code>exists (select 1 from public.pins ...)</code> を含む。
+          ポリシー式の中のサブクエリは呼び出し側の権限でテーブル権限検査を受けるが、
+          <code>pins</code> は <code>authenticated</code> に grant されていない（意図的に、ビュー越しにしか読ませない方針のため）。
+          結果、行が一致するか以前に <code>permission denied for table pins</code> で落ちる。
+          買い手・売り手のどちらで叩いても同じだった。
+        </p>
+        <p>
+          皮肉なことに、この罠は <code>storage.sql</code> のコメントに正確に書かれている
+          （だから写真の可否判定は security definer 関数に逃がしてある）。同じ罠を購入テーブルで踏んでいる。
+          クライアント側は <code>purchases.data ?? []</code> で握り潰すため、
+          エラーは出ず、預かり中・確定・返金の合計がすべて ¥0 と表示される。
+        </p>
+        <div class="cite">
+          <b>init.sql:308-313</b> purchases_read ポリシー · <b>init.sql:342</b> grant は存在するが機能しない<br>
+          <b>src/data/supabaseRepository.ts:744</b> <code>sb().from('purchases').select('*')</code><br>
+          修正: 判定を security definer 関数に逃がすか、ビューを1枚挟む
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="f-head">
+          <span class="chip chip-crit">Critical</span>
+          <span class="chip chip-flat">grep で確認</span>
+        </div>
+        <p class="f-title">入金する手段が無い。本番では誰も購入も依頼もできない</p>
+        <p>
+          台帳の種別に <code>topup</code> は定義されているが、<em>topup 行を作る RPC がひとつも公開されていない</em>。
+          残高を増やす唯一の関数 <code>post_entry</code> は（正しく）誰からも呼べないよう revoke されている。
+          <code>purchase_pin_slot</code> と <code>create_bounty</code> は残高不足で必ず例外になるため、
+          Supabase を繋いだ瞬間に全ユーザーが残高0で固定される。
+        </p>
+        <p>
+          出金側も同様で、<code>request_payout</code> は <code>payout_requests</code> に行を積んで台帳から引くだけ。
+          実送金に進める処理は存在しない。にもかかわらず画面は「すぐに残高から引き、出金として確定します」「出金済み」と表示する。
+          実ユーザーに触らせると <strong>「金が消えて出金済みと出たが振り込まれない」</strong> になる。
+        </p>
+        <div class="cite">
+          <b>init.sql:32</b> ledger_kind に topup あり · <b>init.sql:352-353</b> 公開関数一覧に入金系なし<br>
+          <b>init.sql:740-755</b> request_payout · <b>src/app/(tabs)/me.tsx:128,150</b> 実態と食い違う表示<br>
+          現状の残高付与手段: Supabase ダッシュボードでの手動 SQL のみ（<code>scripts/seed-remote.mjs</code>）
+        </div>
+      </div>
+
+      <div class="finding sev-high">
+        <div class="f-head">
+          <span class="chip chip-high">High</span>
+          <span class="chip chip-flat">自分で確認</span>
+        </div>
+        <p class="f-title">「10分で自動採用されます」と表示するが、サーバーに自動採用は無い</p>
+        <p>
+          依頼画面は応募者に自動採用を約束する。しかし本番の <code>run_tick</code> に自動採用の分岐は存在しない。
+          存在するのは「30分で heading を lapsed」「期限で reported ごと lapsed し、報酬は依頼者へ返還」だけ。
+          自動採用を回すのはローカル実装のみで、<code>supabaseRepository.ts</code> のコメントは事実に反する。
+        </p>
+        <p>
+          供給側が最も嫌う <strong>「現地まで行って写真つきで報告したのに1円も入らない」</strong> が仕様として起きる。
+          二面市場で先に枯れるのは供給側なので、これは事業リスクとして最上位に近い。
+        </p>
+        <div class="cite">
+          <b>20260831070000_drop_tips.sql:41-79</b> 本番 run_tick に自動採用なし<br>
+          <b>src/app/request/[id].tsx:327, 408</b> UI の約束 · <b>src/data/localRepository.ts:341-349</b> ローカルのみ実装
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section id="seven">
+      <h2>クライアント構想の7ステップとの照合</h2>
+      <p class="sec-note">構想の各段を、実際の画面・RPC・DB で辿った結果。</p>
+
+      <ol class="steps">
+        <li class="step">
+          <div class="step-n"></div>
+          <div class="step-b">
+            <div class="step-t"><b>品Aを買いたい</b><span class="chip chip-ok">成立</span></div>
+            <p>地図と検索で探せる。既定は「募集」モード。</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-n"></div>
+          <div class="step-b">
+            <div class="step-t"><b>近くの店を回るが売り切れ</b><span class="chip chip-ok">アプリ外</span></div>
+            <p>—</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-n"></div>
+          <div class="step-b">
+            <div class="step-t"><b>どこにあるか分からない</b><span class="chip chip-high">導線が切れる</span></div>
+            <p>販売モードで空振りしたとき、依頼へ誘導するボタンが無い。空の状態は文言だけで、検索語も依頼作成画面に引き継がれない。ここは数行で直せるが、体験の要。</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-n"></div>
+          <div class="step-b">
+            <div class="step-t"><b>有料で情報提供を募る</b><span class="chip chip-crit">本番で不可</span></div>
+            <p>フォーム自体はよく出来ている（範囲・報酬・採用人数・締切・「無かった場合も払うか」まで先回りして聞く）。だが送信には残高が要り、入金手段が無いため本番では1件も作れない。</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-n"></div>
+          <div class="step-b">
+            <div class="step-t"><b>集まる</b><span class="chip chip-high">届かない</span></div>
+            <p>集まるのは「情報の提案」ではなく「向かう」という宣言。依頼の寿命は30〜120分だが、プッシュ通知も Realtime も依存に入っていないので、アプリを開いていない供給者には事実上届かない。</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-n"></div>
+          <div class="step-b">
+            <div class="step-t"><b>実績をもとに信頼度を判断して買う</b><span class="chip chip-crit">未実装</span></div>
+            <p>構想の中核だが、依頼フローには「買う前に選ぶ」構造が無い。応募者が報告本文と写真を先に渡し、依頼者は<strong>全文を読んでから</strong>採用/不採用を押す。応募者一覧には絵文字と名前しか出ない。詳細は次節。</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-n"></div>
+          <div class="step-b">
+            <div class="step-t"><b>行って買えた</b><span class="chip chip-high">記録されない</span></div>
+            <p>結果の申告はピン購入にしか無く、依頼の報告が正しかったかは記録されない。だから実績も積み上がらない。</p>
+          </div>
+        </li>
+      </ol>
+
+      <div class="note">
+        <p><b>販売（ピン）側の「情報を買う前に中身が見えない」問題への回答は筋が通っている。</b>
+        未購入者向けの型 <code>PublicPin</code> は本文フィールドを構造として持たず、DB でもビュー越しにしか渡さない。
+        買う前には「撮影の裏づけ」（対象から何m・何分前・測位誤差・偽装申告の有無）だけを見せる。
+        これはマスクではなく不在なので、実装として強い。ただし<strong>その信号が一覧・地図には出ず、詳細を開くまで届かない</strong>ため、
+        「複数集めて実績で選ぶ」という比較の場では機能していない。</p>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section id="trust">
+      <h2>「実績で信頼を判断する」が成立しない4つの理由</h2>
+      <p class="sec-note">構想の第6ステップは、この事業の差別化そのもの。現状は最も薄い。</p>
+
+      <h3>1. 本番ではスコアが永久に null</h3>
+      <p>
+        前述のとおり実績カウンタを更新する唯一の関数が起動しない。加えて懸賞の採用（<code>accept_bounty_application</code>）は
+        プロフィールのカウンタに一切触れないので、<em>報告専業のユーザーは仕組み上ずっと「実績なし」</em>。
+        代替指標の <code>acceptedReportCount</code> は Supabase 実装で <code>0</code> 固定を返している。
+      </p>
+
+      <h3>2. 指標が1変数で、統計的に意味を持たない</h3>
+      <p>
+        スコアは <code>hit / (hit + miss)</code> のみ。時間減衰も、カテゴリ別も、件数の信頼区間も、買い手側の評価も無い。
+        表示は1勝0敗を「100%・緑」として熟練者と並べる。皮肉なことに、削除済みの旧実装には
+        「判定4件未満は非表示」という最小標本ゲートがあったが、撤去時に一緒に失われている。
+      </p>
+
+      <h3>3. 買い手側が無コストで踏み倒せる</h3>
+      <p>
+        <code>miss</code> の申告に証拠も担保も要らず全額返金される。しかも購入済みビューは escrow 状態を条件にしないため、
+        <strong>返金後も本文と写真を読み続けられる</strong>。「買う → 読む → 違っていたと申告 → 全額返金 → 情報は保持」がコスト0で回る。
+        買い手側には実績列そのものが無いので、虚偽申告の履歴も残らない。停止を負うのは売り手だけ。
+        （現時点ではこの経路自体が型エラーで動かないため実害は出ていないが、1行修正した瞬間に開く穴である。）
+      </p>
+
+      <h3>4. シビル耐性が無い</h3>
+      <p>
+        メール確認が無効で、誰でもアカウントを発行できる。共謀2アカウントで出品→購入→hit を回せば、
+        手数料20%だけを払って緑バッジを製造できる（¥100の情報なら実質¥20/件）。
+        逆に4アカウントの無料 miss 申告で、競合を24時間の出品停止に追い込める。
+        通報も3人で自動的にピンを取り下げるが、運営の判断が一切介在しない。フォロワー数も自己 insert で偽造できる。
+      </p>
+
+      <div class="note">
+        <p><b>ここが最大の投資判断ポイント。</b>「情報の深度の差を金で買う」という構想の価値は、
+        売り手の信頼を買い手が事前に見積もれることに全面的に依存している。
+        現状はその機構が本番で1件もデータを蓄積しない。<strong>直すべき優先度は決済より上</strong>だと考える。</p>
+      </div>
+    </section>
+
+    <!-- 6 -->
+    <section id="arb">
+      <h2>金アービトラージ・不動産予測への距離</h2>
+      <p class="sec-note">この構想については、リポジトリ自身が既に一度答えを出している。</p>
+
+      <p>
+        重要な発見がある。migration <code>20260831060000_tips.sql</code> は、
+        <em>非地理・非写真の「予想」商品（競馬の買い目）を完全に実装している</em>。
+        そして<strong>同じコミットの中の</strong> <code>20260831070000_drop_tips.sql</code> が、
+        そのテーブルと RPC を全て削除し、エスクローを返金して撤退している。
+      </p>
+      <p>
+        撤退の理由は実装を読めば分かる。予想商品では結果判定が売り手の自己申告にならざるを得ず、真偽検証が構造的に破綻する。
+        現在も <code>catalog.ts</code> は「見た事実ではない予想」を明示的な禁止事項として掲げている。
+        つまり<strong>クライアントが究極形として挙げた方向は、この開発者が一度試して意図的に捨てた道</strong>である。
+        これは失点ではなく、判断の記録として評価すべき点だと思う。
+      </p>
+
+      <h3>現状の構造的前提</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>前提</th><th>どこで固定されているか</th><th>予測・相場情報への影響</th></tr></thead>
+          <tbody>
+            <tr><td>座標が必須</td><td><code>pins.lat/lng</code> が not null</td><td>非地理的情報を載せる器が無い</td></tr>
+            <tr><td>店頭在庫カテゴリ固定</td><td><code>stock_state</code> not null · UI に選択肢なし</td><td>カテゴリ追加で12〜14ファイル + 新規 migration</td></tr>
+            <tr><td>現地写真が必須</td><td>250m / 15分 / 誤差150m で判定</td><td>相場・予測情報には適用できない</td></tr>
+            <tr><td>価格 ¥50–2,000</td><td>check 制約</td><td>裁定利益の分配として桁が足りない</td></tr>
+            <tr><td>2時間で自動確定</td><td><code>run_tick</code></td><td>相場情報の検証期間として短すぎる</td></tr>
+            <tr><td>検索は地図の矩形のみ</td><td>bbox + 端末側の部分一致</td><td>銘柄・物件・商品コードで引く軸が無い</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>アービトラージ用途そのものの難点</h3>
+      <ul>
+        <li><strong>自己破壊性。</strong>先着枠は最大3、上限¥2,000。同じ裁定機会を複数人が買った時点で機会は消える。情報の価値と販売可能部数が反比例する。</li>
+        <li><strong>踏み倒しが常態化する。</strong>検証不能な相場情報では、読んだあと <code>too_thin</code> で全額返金する動機が常に勝つ。</li>
+        <li><strong>語彙が全て現地前提。</strong>外れ理由は「着いたら売り切れ」「写真が別の場所」「内容が薄い」の3種のみ。</li>
+        <li><strong>法的性質が変わる。</strong>不動産の値上げ予測は投資助言（金商法）や媒介性（宅建業法）に触れうる領域で、店舗の仕入値は不正競争防止法の営業秘密に関わる。※法務確認が必要な論点として提示するもので、私は法律家ではない。</li>
+      </ul>
+
+      <div class="note">
+        <p><b>提案。</b>この方向は「将来のビジョン」として資料に置くのは有効だが、
+        <strong>PMF 検証の対象からは外すべき</strong>。まず単価を上げられる現地確認（法人の店頭調査・什器や棚割の確認・物件の現況確認）で
+        ¥2,000 の上限を外すほうが、同じ構造のまま経済性が改善する。</p>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section id="money">
+      <h2>決済と法規制</h2>
+      <p class="sec-note">未着手であること自体は正しい判断。ただし着手順序を間違えると作り直しになる。</p>
+
+      <p>
+        台帳の設計は良い。残高カラムを持たず、<code>available</code> と <code>pending</code> の増減を1行に両方持たせることで、
+        「預かりへ移す」が1行で表現され片側だけ更新される事故が起きない。問題は台帳の外側にある。
+      </p>
+
+      <h3>資金決済法上の類型が未決定</h3>
+      <p>
+        現行の残高は3類型のどれとも整合しない中間状態にある。チャージして買うなら前払式支払手段だが、
+        出金機能があるため「払戻し可能＝前払式ではない」側に倒れる。A の入金が B の出金として出るなら為替取引で資金移動業。
+        売買代金を預かって売り手へ渡すだけなら収納代行だが、<strong>2021年改正で「個人が受取人となる収納代行」は原則として資金移動業に取り込まれた</strong>。
+        本サービスの受取人はまさに個人（売り手・報告者）である。
+      </p>
+      <p>
+        実装への影響が決定的なので順序が重要。収納代行に寄せるなら残高の滞留と出金機能を捨てて都度決済＋PSP経由送金にする必要があり、
+        <code>ledger.ts</code> の hold/settle モデルごと書き直しになる。<strong>類型を法務と確定する前にコードを書き始めてはいけない。</strong>
+      </p>
+
+      <h3>その他の論点</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>領域</th><th>現状</th><th>影響</th></tr></thead>
+          <tbody>
+            <tr><td>エスクロー</td><td>帳簿上のラベルのみ。分別管理も信託も供託も無い</td><td>資金移動業なら未達債務の全額保全義務</td></tr>
+            <tr><td>KYC</td><td>メール＋8文字パスワードのみ</td><td>犯罪収益移転防止法の取引時確認が未実装</td></tr>
+            <tr><td>規約・特商法・PP</td><td>リポジトリ内に0件</td><td>20%の手数料を取る以上、仲介事業者としての表示義務</td></tr>
+            <tr><td>同意の記録</td><td>チェックボックスはあるが DB に同意列が0件</td><td>同意させた事実を立証できない</td></tr>
+            <tr><td>「懸賞」の語</td><td>UI に多数残る</td><td>実態は成果報酬型の役務委託。景表法の景品規制という無用の論点を自ら招く</td></tr>
+            <tr><td>削除申出窓口</td><td>存在しない</td><td>情報流通プラットフォーム対処法の要求</td></tr>
+            <tr><td>LICENSE</td><td>Expo テンプレートの MIT のまま</td><td>README の「Private・再配布禁止」と正面から矛盾。IP デューデリで最初に指摘される</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>見落とされている悪用シナリオ</h3>
+      <ul>
+        <li><strong>懸賞による代理ストーキング。</strong>依頼の座標は自由入力で、サーバー側にエリア検証が無い。
+          「この座標の家に車があるか、写真つきで」は現行コードで完全に成立する。禁止事項の第1項がまさにこれを禁じているのに、最も検知不能。</li>
+        <li><strong>報告者の物理的安全。</strong>依頼者は応募者が特定の座標へ30分以内に来ることを事前に知れる（heading 状態と距離）。待ち伏せの下地になる。緊急連絡も安全ガイドも無い。</li>
+        <li><strong>転売助長。</strong>唯一の有効カテゴリが店頭在庫で、例文は品薄ゲーム機。買いたい消費者と転売目的をコード上で区別する仕組みが無い。決済代行の加盟店審査とストア審査の両方で落ちやすい典型。</li>
+        <li><strong>店舗規約違反の教唆。</strong>店内撮影は多くの小売で禁止されている。撮影証拠を必須にする設計は、構造的にそれを勧めている。店舗からのオプトアウト窓口が無い。</li>
+        <li><strong>自己取引による資金洗浄。</strong>KYC もシビル耐性も無いので、入金→別アカウントで自分の情報を買う→出金、で20%だけ払って出所を洗える。</li>
+      </ul>
+    </section>
+
+    <!-- 8 -->
+    <section id="unit">
+      <h2>ユニットエコノミクス</h2>
+      <p class="sec-note">ここが一番早く効いてくる制約だと思う。</p>
+
+      <p>
+        価格域 ¥50–2,000、手数料 <code>floor(amount × 0.2)</code>。つまり<strong>1取引あたりの粗利は ¥10〜400</strong>、
+        中央価格帯なら ¥40〜100。ここから決済手数料（Stripe なら 3.6%＋固定、IAP 判定なら 15〜30%）と
+        <strong>振込手数料 ¥150〜250/件</strong> が引かれる。最低出金額の定義がコードに無いので、
+        現状は ¥40 の出金申請が通る設計で、1件ごとに赤字になる。
+      </p>
+
+      <div class="note">
+        <p><b>供給側の労働経済が先に破綻する。</b>¥100〜500 の報酬のために現地へ移動して撮影する労働は、移動込みで15〜30分。
+        時給換算 ¥200〜1,000 で、東京都の最低賃金を下回る。
+        需要仮説を検証する前に、<strong>供給側が経済的に成立するかを先に検算すべき</strong>。
+        これは価格上限を上げるか、1回の移動で複数の依頼をまとめて処理できる設計にするかでしか解けない。</p>
+      </div>
+
+      <h3>Apple / Google の課金規約</h3>
+      <p>
+        売っているのは「アプリ内でアンロックされるテキストと写真」で、デジタルコンテンツの典型形に見える。
+        IAP 必須と判定されれば 15〜30% が上乗せされ、自社の 20% と合わせて粗利が消える。
+        「実物のモノ・サービスの手配」例外に当たるかは非自明。
+        <strong>これは法務より先に、Apple の事前レビュー相談で確定させるべき唯一の問い</strong>で、
+        答え次第で「出品の主戦場はネイティブ」という前提もアーキテクチャも調達ストーリーも変わる。
+      </p>
+    </section>
+
+    <!-- 9 -->
+    <section id="infra">
+      <h2>「継続的に改善できる技術インフラか」への回答</h2>
+      <p class="sec-note">クライアントが最も重視している問いなので、率直に書く。</p>
+
+      <p>
+        <strong>結論から言うと、今のまま人を増やしても開発速度は上がらず、事故率だけが上がる。</strong>
+        まず2〜3週間の基盤整備が要る。ただしこれは「筋が悪い」という意味ではない。むしろ逆で、
+        DB 層の権限設計と <code>verify:schema</code> は、この段階のプロダクトとしては明確に水準以上の資産である。
+      </p>
+
+      <h3>資産として評価できるもの</h3>
+      <ul>
+        <li><code>verify:schema</code> が PGlite で migration を当てて権限境界を36項目実測する。Docker もクラウドも要らずに走り、実際に通る。<strong>「書いたつもり」ではなく外から叩いて確かめる文化がある</strong>ことの証拠。</li>
+        <li>未購入者に秘密を渡さない設計を、UI のマスクではなく型と DB ビューの不在で実現している。</li>
+        <li>座標を距離に落として捨てる方針が、型レベルで一貫している。</li>
+        <li>設計判断の理由が SQL のコメントに濃く記録されている（init.sql は 994行中 122行がコメント）。</li>
+      </ul>
+
+      <h3>スケールを阻むもの</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>領域</th><th>現状</th></tr></thead>
+          <tbody>
+            <tr><td>自動テスト</td><td>src 14,809 行に対して0件。回帰検知が効くのは SQL の権限36項目だけ</td></tr>
+            <tr><td>CI</td><td><code>.github</code> 無し。しかも今日 <code>eslint .</code> と <code>tsc</code> が赤なので、有効化の前に赤を消す作業が要る</td></tr>
+            <tr><td>環境分離</td><td>接続先は1プロジェクトのみ。<code>db-push</code> は確認もドライランも無く、down migration は0本</td></tr>
+            <tr><td>監視</td><td>Sentry・分析・構造化ログが0件。加えて金が動く RPC の失敗が握り潰される</td></tr>
+            <tr><td>二重実装</td><td>36メソッドの契約を local(1,118行) と supabase(1,172行) の2本で満たす</td></tr>
+            <tr><td>定数の三重化</td><td>出品制限のルール（4件/0.4/24h）が TS と SQL に literal で重複。TTL の選択肢は migration 4本に再掲</td></tr>
+            <tr><td>DB型</td><td>未生成。行の形は手書き interface で <code>select('*')</code> 多用。列名を変えても型エラーにならない</td></tr>
+            <tr><td>クエリ</td><td>全書き込みのたびに <code>profiles</code> 全件を limit 無しで再取得。依頼一覧も無制限</td></tr>
+            <tr><td>バス係数</td><td>1。コミット5本すべて単独作者・全て main 直・PR 0件・ADR や CONTRIBUTING 無し</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        具体的な体感として、<strong>新カテゴリを1つ足すのに実質12〜14ファイル＋新規 migration</strong>、
+        取引ステータスを1つ足すと文字列が14ファイル74箇所に散る。
+        <code>create_pin</code> は既に migration をまたいでフルコピーが4版ある。
+      </p>
+    </section>
+
+    <!-- 10 -->
+    <section id="store">
+      <h2>ストア審査で確実に落ちる項目</h2>
+      <p class="sec-note">法務判断を待つ必要がなく、着手が最も早い塊。</p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>要件</th><th>現状</th><th>根拠</th></tr></thead>
+          <tbody>
+            <tr><td>アプリ内アカウント削除</td><td class="r-no">無し</td><td>Apple が2022年6月から必須化。これ単体で落ちる</td></tr>
+            <tr><td>ログアウト UI</td><td class="r-no">無し</td><td><code>signOut</code> は web の <code>?welcome=1</code> デバッグ経路からしか呼ばれない</td></tr>
+            <tr><td>パスワード再設定</td><td class="r-no">無し</td><td>該当コード0件。残高を持ったまま入れなくなる</td></tr>
+            <tr><td>ユーザーブロック</td><td class="r-no">無し</td><td>Guideline 1.2（UGC）必須要件。follow はあるが block が無い</td></tr>
+            <tr><td>公開の連絡先</td><td class="r-no">無し</td><td>同上。問い合わせ導線がアプリ内に存在しない</td></tr>
+            <tr><td>通報の24時間対応</td><td class="r-no">無し</td><td>3件で自動取り下げのみ。人の介入経路が無い</td></tr>
+            <tr><td>コンテンツ事前フィルタ</td><td class="r-no">無し</td><td>画像も本文も事前審査ゼロ</td></tr>
+            <tr><td>プライバシーマニフェスト</td><td class="r-no">無し</td><td>位置・写真・購買履歴を扱うため必須</td></tr>
+            <tr><td>年齢確認</td><td class="r-no">無し</td><td>金銭＋UGC＋位置。未成年者契約取消権のリスクも同時に発生</td></tr>
+            <tr><td>アクセシビリティ</td><td class="r-mid">ほぼ無し</td><td><code>accessibilityLabel</code> は3件、<code>accessibilityRole</code> は0件。自前のタブバーとボトムシートはスクリーンリーダーで操作困難</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 11 -->
+    <section id="plan">
+      <h2>行動計画</h2>
+      <p class="sec-note">クライアントの「技術インフラが提供されるならマーケと調達を全力でやる」という条件への回答として。</p>
+
+      <h3>P0 — コードを書く前に答えるべき問い</h3>
+      <div class="plan">
+        <div class="task">
+          <span class="task-k k-p0">P0</span>
+          <div>
+            <b>Apple の課金規約下で 20% は成立するか</b>
+            <span>IAP 必須判定なら粗利が消える。事前レビュー相談で確定させる。答え次第でアーキテクチャと調達ストーリーが変わるため、これが最優先。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p0">P0</span>
+          <div>
+            <b>資金決済法上の類型を法務と確定する</b>
+            <span>前払式／資金移動業／収納代行のどれか。収納代行に寄せるなら台帳モデルごと書き直しになる。期限と担当を決める。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p0">P0</span>
+          <div>
+            <b>1取引の実質粗利と、供給側の時給を検算する</b>
+            <span>振込手数料と決済手数料を引いて黒字になる価格帯が存在するか。存在しないなら単価を上げられるカテゴリへ最初から行く。最低出金額はこの計算の従属変数。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p0">P0</span>
+          <div>
+            <b>代理ストーキングと店内撮影をチェックボックス以外で何で止めるか</b>
+            <span>止められないなら、事故時の責任を誰がどう負うか。現状は「禁止と書いてある」以上のものが無い。</span>
+          </div>
+        </div>
+      </div>
+
+      <h3>P1 — 本番経路の修理（1〜2週間）</h3>
+      <div class="plan">
+        <div class="task">
+          <span class="task-k k-p1">P1</span>
+          <div>
+            <b>3つの起動しない機能を直す</b>
+            <span>submit_verdict の enum キャスト（1行）／purchases の RLS を security definer 経由に／入金 RPC の追加。同時に <code>rpcVoid</code> をやめ、RPC のエラーを画面に出す。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p1">P1</span>
+          <div>
+            <b>サーバー側に自動採用を実装する</b>
+            <span>UI が約束している10分自動採用が本番に無い。供給側が枯れる直接原因になる。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p1">P1</span>
+          <div>
+            <b>実績システムを作り直す</b>
+            <span>懸賞の採用も実績に算入する／最小標本ゲートを戻す／一覧と応募者リストにスコアを出す／買い手側の申告履歴を持つ／返金後は本文を閉じる。構想の中核なので決済より優先。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p1">P1</span>
+          <div>
+            <b>計測を1行目から入れる</b>
+            <span>現状 analytics も Sentry も0件。「PMF 確認後に調達」と言うには、PMF の定義（懸賞充足率・初回情報到達時間・当たり率・リピート率）と計測が先に要る。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p1">P1</span>
+          <div>
+            <b>CI を1本入れる</b>
+            <span><code>tsc</code> + <code>eslint</code> + <code>verify:schema</code>。今日は赤なので、まず赤を消してから有効化する。rules.ts の金銭ロジックにユニットテストを付けるのが費用対効果が最も高い。</span>
+          </div>
+        </div>
+      </div>
+
+      <h3>P2 — 審査と開示</h3>
+      <div class="plan">
+        <div class="task">
+          <span class="task-k k-p2">P2</span>
+          <div>
+            <b>ストア必須5点を実装する</b>
+            <span>アカウント削除・ログアウト・パスワード再設定・ブロック・公開の連絡先。法務判断を待たずに着手できる。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p2">P2</span>
+          <div>
+            <b>開示資料の整合を取る</b>
+            <span>README の「完了」表記が実動作と食い違っている（スキーマ・Supabase 実装＝完了と書かれているが、上記3点は起動しない）。LICENSE も Expo のまま。これは技術負債ではなく開示の問題で、投資家に見せる前に直すべき。</span>
+          </div>
+        </div>
+        <div class="task">
+          <span class="task-k k-p2">P2</span>
+          <div>
+            <b>転売助長というポジションを取るか遮断するか決める</b>
+            <span>決済代行の加盟店審査・ストア審査・広報の3つに同時に効く。先に立場を決めないとカテゴリ設計もモデレーション基準も書けない。</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <p><b>順序についての意見。</b>14,809行と migration 9本を書いた後で「PMF を確認する」という順序自体を、
+        一度問い直す価値がある。最初の30取引を人力で回す形（オープンチャット＋フォーム＋運営が手で仲介）なら、
+        <strong>コードを1行も足さずに「無料の代替（在庫速報アカウント、再販通知 Bot、公式在庫 API）に対して有料の余地があるか」という
+        一番危険な仮説を来週から検証できる</strong>。リポジトリ全体で競合・代替への言及が0件なのは、
+        技術ではなく仮説設計の空白として気になった。</p>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    対象コミット 2b082d7 · 解析日 2026-09-02<br>
+    手法: 23エージェントによる全ファイル精読（8領域マップ → 敵対的検証 → 6論点評価 → 完全性批評）＋ PGlite での権限・型の実測再現。<br>
+    「自分で再現」と記した項目は、エージェントの報告ではなく私自身がローカルで実行して確認したもの。法務に関する記述は論点の整理であり、専門家の確認が必要。
+  </footer>
+
+</div>
+</body>
+</html>
